@@ -9,7 +9,7 @@
       },
       "package": "id.xtreme.grokbotown",
       "predictiveBackGestureEnabled": false,
-      "versionCode": 25
+      "versionCode": 36
     },
     "icon": "./assets/icon.png",
     "ios": {
