@@ -22,6 +22,13 @@ character, or the room's first member as fallback, must equal the
 chief). Triggers from any other bot's room are skipped, logged, and
 marked skipped_not_chief — never run.
 
+Auto mode (set once, no APK change): with RUNNER_AUTO=1 (or --auto),
+every new user message in a Chief chat room is claimed as a task,
+without the prefix. The prefix still works in auto mode (it is
+stripped first). Chief-only gate, grace period, claimed dedup,
+duplicate guard, and @delegation are unchanged — auto only removes
+the per-task prefix, it does not remove any safety gate.
+
 Delegation (Chief-only, 29 Okt 2026): a Chief trigger may start
 with "@<sub-bot>" (sub-bot id or name, e.g. "@yt-analytics").
 The turn still runs server-side, but the finished result is posted
@@ -87,6 +94,8 @@ def build_config(args):
         "grace_seconds": args.grace or float(_env("RUNNER_GRACE_SECONDS",
                                                   "90")),
         "trigger": args.trigger or _env("RUNNER_TRIGGER", "RUNNER:"),
+        "auto": getattr(args, "auto", False) or _env(
+            "RUNNER_AUTO", "0").lower() in ("1", "true", "yes"),
         "chief": args.chief or _env("RUNNER_CHIEF", "xm"),
         "scope": args.scope or _env("RUNNER_SCOPE", "team"),
         "max_rounds": args.max_rounds or int(_env("RUNNER_MAX_ROUNDS",
@@ -618,9 +627,12 @@ class Runner:
             if msg.get("role") != "user":
                 continue
             text = (msg.get("text") or "").strip()
-            if not text.lower().startswith(trigger):
+            if text.lower().startswith(trigger):
+                task = text[len(self.cfg["trigger"]):].strip()
+            elif self.cfg.get("auto"):
+                task = text
+            else:
                 continue
-            task = text[len(self.cfg["trigger"]):].strip()
             msg_id = msg.get("id")
             key = "%s:%s" % (room_id, msg_id)
             if key in self.claimed or not task:
@@ -829,6 +841,7 @@ def parse_args(argv):
     parser.add_argument("--poll", type=float, default=0)
     parser.add_argument("--grace", type=float, default=0)
     parser.add_argument("--trigger", default="")
+    parser.add_argument("--auto", action="store_true", default=False)
     parser.add_argument("--chief", default="")
     parser.add_argument("--scope", default="")
     parser.add_argument("--max-rounds", type=int, default=0)
@@ -839,10 +852,10 @@ def parse_args(argv):
 def main(argv):
     cfg = build_config(parse_args(argv))
     log("starting: server=%s model=%s status=%s:%d poll=%ss grace=%ss "
-        "trigger=%r chief=%r scope=%s"
+        "trigger=%r chief=%r scope=%s auto=%s"
         % (cfg["server"], cfg["model"], cfg["status_host"],
            cfg["status_port"], cfg["poll_seconds"], cfg["grace_seconds"],
-           cfg["trigger"], cfg["chief"], cfg["scope"]))
+           cfg["trigger"], cfg["chief"], cfg["scope"], cfg.get("auto")))
     runner = Runner(cfg)
     httpd = ThreadingHTTPServer(
         (cfg["status_host"], cfg["status_port"]),

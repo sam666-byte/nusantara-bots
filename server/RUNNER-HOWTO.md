@@ -29,7 +29,36 @@ Kamu → Chief → sub-bot → kerja
    environment (lihat "Konfigurasi"). Key **tidak pernah** ditulis
    di repo, log, atau chat.
 
-## Cara pakai harian
+## Mode otomatis (aktifkan sekali, disarankan)
+
+Mulai Runner dengan mode otomatis, sekali saja saat start:
+
+```bash
+RUNNER_AUTO=1 setsid nohup python3 runner_service.py > /tmp/runner-mvp.log 2>&1 < /dev/null &
+```
+
+Atau pakai flag yang sama artinya:
+
+```bash
+python3 runner_service.py --auto
+```
+
+Setelah itu, **tidak perlu lagi menulis `RUNNER:` tiap task**.
+Kirim tugas biasa saja di chat Chief, tutup aplikasi, balasannya
+akan muncul di room. Delegasi tetap jalan tanpa prefix:
+
+```
+@yt-analytics Baca Analytics channel dan laporkan subscriber + 3 Shorts teratas.
+```
+
+Perintah lama `RUNNER: ...` tetap jalan di mode otomatis (prefix-nya
+dipotong dulu). Yang tidak berubah: hanya room Chief yang
+dijalankan, grace 90 detik, klaim tidak pernah diulang, dan cek
+dobel sebelum posting. Untuk mematikan mode otomatis, restart
+Runner tanpa `RUNNER_AUTO` (atau `RUNNER_AUTO=0`) — kembali ke
+mode prefix.
+
+## Cara pakai harian (mode prefix, kalau mode otomatis mati)
 
 ### 1. Pastikan Runner hidup
 
@@ -80,7 +109,8 @@ yang menyebutkan daftar sub-bot yang valid.
 ## Yang terjadi di balik layar
 
 1. Runner mengecek room tiap 15 detik.
-2. Ketemu perintah `RUNNER:` di room Chief tanpa balasan asisten.
+2. Ketemu perintah `RUNNER:` di room Chief tanpa balasan asisten
+   (atau, di mode otomatis, pesan baru apa pun di room Chief).
 3. Menunggu 90 detik (grace) — memberi kesempatan loop aplikasi
    menjawab dulu kalau aplikasi ternyata masih terbuka.
 4. Mengklaim tugas (tugas yang sudah diklaim tidak pernah diulang,
@@ -138,6 +168,7 @@ noVNC juga mati saat reboot — itu pekerjaan rumah terpisah.
 | `RUNNER_POLL_SECONDS` | `15` | Interval cek room |
 | `RUNNER_GRACE_SECONDS` | `90` | Grace sebelum klaim |
 | `RUNNER_TRIGGER` | `RUNNER:` | Prefix perintah |
+| `RUNNER_AUTO` | `0` | Mode otomatis: `1` = klaim pesan Chief tanpa prefix `RUNNER:`, aktifkan sekali saat start Runner |
 | `RUNNER_CHIEF` | `xm` | Id bot Chief |
 | `RUNNER_SCOPE` | `team` | Scope komputer |
 | `RUNNER_MAX_ROUNDS` | `8` | Max ronde model+tool |
@@ -151,6 +182,7 @@ file env (`RUNNER_ENV_FILE`). Nilainya tidak pernah dicetak di log.
 | Gejala | Penyebab umum / solusi |
 |---|---|
 | Perintah tidak jalan | Pastikan dikirim di **room Chief**, bukan room sub-bot. Perintah dari room lain diabaikan. Cek juga Runner hidup (`/health`). |
+| Perintah tanpa `RUNNER:` tidak jalan | Pastikan Runner dijalankan dengan `RUNNER_AUTO=1` (mode otomatis). Kalau tidak, pakai prefix `RUNNER:`. |
 | Balasan dobel | Aplikasi masih terbuka dan loop aplikasi menjawab setelah grace. Pola aman: kirim perintah, langsung tutup aplikasi. |
 | Runner menjawab tanpa tool ("dari teks saja") | Komputer sedang dipegang user (kontrol bukan bot) — tool ditolak server. Lepas kontrol ke bot, lalu kirim ulang perintah. |
 | Balasan "Runner gagal: ..." | Baca pesan gagalnya — biasanya model/endpoint tidak terjangkau. Perbaiki endpoint/key, lalu kirim ulang. |
