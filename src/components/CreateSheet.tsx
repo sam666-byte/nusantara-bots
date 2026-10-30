@@ -26,7 +26,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { createCharacter, createRoom, focusCodeFor, getCharacters } from '../api/client';
+import { createCharacter, createRoom, focusCodeFor, getCharacters, getServerUrl } from '../api/client';
 import { createBotChat } from '../api/botChat';
 import type { CharacterFocus } from '../api/client';
 import { ApiError } from '../api/types';
@@ -46,9 +46,31 @@ const FOCUS_OPTIONS: Array<{ value: CharacterFocus; label: string }> = [
 
 /** Pesan error server apa adanya (bukan pesan generik) bila ada. */
 function serverErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : '';
+  // Kegagalan jaringan BUKAN error server, jadi diterjemahkan ke
+  // pesan ramah (bukan mentah seperti "UnknownHostException").
+  // Error server asli (nama duplikat, fokus tidak dikenal, dll.)
+  // tetap ditampilkan apa adanya, sesuai aturan 0.10.9.
+  if (/unknownhost|unable to resolve host|fetch failed|network request failed/i.test(raw)) {
+    return 'Server tidak bisa dihubungi — cek Server URL di Settings dan pastikan server jalan dan satu jaringan.';
+  }
   if (err instanceof ApiError && err.message) return err.message;
   if (err instanceof Error && err.message) return err.message;
   return 'Gagal. Coba lagi.';
+}
+
+/** Pesan ramah bila Server URL masih placeholder, null bila sudah asli. */
+async function placeholderServerError(): Promise<string | null> {
+  try {
+    const url = await getServerUrl();
+    if (url.toLowerCase().includes('your_server')) {
+      return 'Server URL masih placeholder — atur dulu di Settings → Server, isi alamat PC kamu, lalu coba lagi.';
+    }
+  } catch {
+    // Gagal baca URL: biarkan panggilan server yang gagal dengan
+    // pesan jaringan ramah di atas, jangan blokir di sini.
+  }
+  return null;
 }
 
 export function CreateSheet() {
@@ -75,6 +97,11 @@ export function CreateSheet() {
   const submitBot = async () => {
     if (!name.trim()) {
       setError('Nama bot wajib diisi.');
+      return;
+    }
+    const placeholder = await placeholderServerError();
+    if (placeholder) {
+      setError(placeholder);
       return;
     }
     setBusy(true);
@@ -114,6 +141,11 @@ export function CreateSheet() {
       setError('Pilih minimal satu anggota.');
       return;
     }
+    const placeholder = await placeholderServerError();
+    if (placeholder) {
+      setError(placeholder);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -138,6 +170,11 @@ export function CreateSheet() {
     // Anggota opsional — space boleh dibuat kosong (workspace yang
     // nanti diisi bot) atau langsung dengan bot di dalamnya.
     const members = Object.keys(selected).filter((id) => selected[id]);
+    const placeholder = await placeholderServerError();
+    if (placeholder) {
+      setError(placeholder);
+      return;
+    }
     setBusy(true);
     setError('');
     try {

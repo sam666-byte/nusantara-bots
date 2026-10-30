@@ -135,7 +135,6 @@ import { cycleAvatar } from '../api/avatar';
 import { ghostColor } from '../api/blob';
 import {
   THINKING_NO_PROGRESS_SECONDS,
-  buildThinkingText,
   summarizeToolArgs,
   waitingSecondsSince,
   type ThinkingState,
@@ -1526,9 +1525,10 @@ export function ChatScreen() {
                 <GhostBlob botId={botId} size={sizes.blobMessage} state="typing" />
               </View>
               <View style={[styles.bubble, styles.bubbleBot]}>
-                <Text style={styles.thinkingText}>
-                  {buildThinkingText(thinking, thinkingWaitingSeconds)}
-                </Text>
+                {/* 30 Okt 2026, Sam: hapus tulisan abu-abu thinking
+                    ("Memakai tool: …" / "Berpikir") total — yang
+                    tersisa hanya TypingDots sebagai penanda bot
+                    sedang bekerja, tanpa teks. */}
                 <TypingDots />
               </View>
             </View>
