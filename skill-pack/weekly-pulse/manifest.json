@@ -1,0 +1,31 @@
+{
+  "name": "weekly-pulse",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Susun draf ringkasan mingguan dari Kanban, memory, dan mail — apa selesai, apa tertahan, apa butuh keputusan; draf saja, manusia yang memutuskan kirim/publish.",
+  "skills": [
+    "weekly-pulse"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": [
+    "kanban",
+    "memory",
+    "mail"
+  ]
+}

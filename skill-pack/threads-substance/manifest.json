@@ -1,0 +1,28 @@
+{
+  "name": "threads-substance",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Use when deepening a Threads (or short social) post so it has a clear claim, evidence, and a reader takeaway—not just a link dump or tool list.",
+  "skills": [
+    "threads-substance"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "https://github.com/fred1357944/threads-substance",
+    "license": "MIT"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

@@ -1,0 +1,32 @@
+{
+  "name": "crew-youtube-team",
+  "kind": "crew",
+  "version": "1.0.0",
+  "description": "A crew of six AI characters that run a YouTube channel like a real team:",
+  "skills": [],
+  "characters": [
+    "chief-officer",
+    "yt-analyst",
+    "yt-idea-scout",
+    "yt-packaging",
+    "yt-scriptwriter",
+    "yt-strategist"
+  ],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

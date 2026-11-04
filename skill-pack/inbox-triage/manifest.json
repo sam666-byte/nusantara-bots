@@ -1,0 +1,31 @@
+{
+  "name": "inbox-triage",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Triage mail masuk per karakter menjadi kartu Kanban dan draf aksi — klasifikasi tugas/info/spam, tanpa kirim langsung; aksi eksternal hanya lewat approval queue.",
+  "skills": [
+    "inbox-triage"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": [
+    "mail",
+    "kanban",
+    "approvals"
+  ]
+}

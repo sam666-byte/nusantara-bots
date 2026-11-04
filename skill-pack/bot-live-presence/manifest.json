@@ -1,0 +1,27 @@
+{
+  "name": "bot-live-presence",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Makes a bot's work visible while it works, so it feels like a real employee, not a loading spinner. Use for any agent character: show a typing indicator while writing, a one-line status of the current action, visible turn-taking with named next speakers, a short completion note, and a visible stop — and never send a message with no substance.",
+  "skills": [
+    "bot-live-presence"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

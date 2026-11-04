@@ -1,0 +1,27 @@
+{
+  "name": "facilitate-agent-meeting-room",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Runs a structured multi-agent meeting room for disputed decisions. Use when a decision is contested and needs a real debate, not routine status: a moderator and one specialist per topic work through a hard message budget, analysis rounds, and a forced debate where each participant attacks the weakest claim with evidence, then the moderator hands the owner a decision with disputed points still listed — never executing before the owner approves.",
+  "skills": [
+    "facilitate-agent-meeting-room"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

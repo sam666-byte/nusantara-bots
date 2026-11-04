@@ -1,0 +1,10 @@
+# Source — apple-app-review-compliance
+
+- Origin repo: https://github.com/yohannescodes/apple-app-review-compliance
+- Upstream path: SKILL.md at the repo root + references/review-matrix.md (+ LICENSE at the repo root)
+- License: MIT, verified from the repo page (License: MIT License (MIT)) and the upstream README license section (original content licensed under the MIT License; include the license and copyright notice when copying or redistributing).
+- Import date: 2026-10-24
+- Adaptations made: none to the instruction body or to references/review-matrix.md, except that hyperlink targets shown only as page-text link markers were written out as plain text: the primary guidelines URL is https://developer.apple.com/app-store/review/guidelines/ (shown in full upstream); other upstream links whose exact target URLs were not visible in the page text were reduced to their guideline numbers / source names rather than guessed. Frontmatter rebuilt for this loader only: `name` kept as `apple-app-review-compliance`, upstream description kept verbatim, `version: 1.0.0` added (upstream frontmatter carried no version). Upstream `license:` frontmatter line is recorded here instead of in SKILL.md.
+- Not imported, with reasons: `agents/openai.yaml` — described upstream as optional UI display metadata, not required for skill validity, and its content was not rendered in the page text, so it could not be scanned; `VALIDATION.md` — not referenced by SKILL.md and not part of the skill's working files. Neither omission affects the loader or the skill's workflow, which references only SKILL.md and references/review-matrix.md.
+- Safety scan (2026-10-24): SKILL.md and references/review-matrix.md read in full before enabling. No secrets/keys/tokens, no curl/wget/uploads to unknown hosts, no credential harvesting, no destructive commands, no personal emails, owner names, or channel names. The skill explicitly says "never print credentials" and its `rg` commands are read-only repository searches. The upstream README's author name was deliberately not copied into any imported file.
+- Files imported: SKILL.md, references/review-matrix.md.

@@ -1,0 +1,27 @@
+{
+  "name": "team-memory",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Gives a team of agents a shared long-term memory that survives across sessions. Use when several agents work for one owner: recall a topic before starting work, save corrections and decisions in full signed with the author's name, let the newest correction win, remove a wrong memory only on the owner's order, and never copy personal data into shared memory.",
+  "skills": [
+    "team-memory"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

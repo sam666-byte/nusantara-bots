@@ -1,0 +1,27 @@
+{
+  "name": "channel-discipline",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Keeps each topic in the channel that owns it. Use when an assistant serves a user across several chats, groups, or workspaces: learn the channel map, check ownership before acting, redirect off-channel topics in one short message instead of doing partial work in the wrong place, and cross channels only on the user's explicit direction.",
+  "skills": [
+    "channel-discipline"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

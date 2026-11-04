@@ -1,0 +1,27 @@
+{
+  "name": "verify-before-upload",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Confirms a file's exact identity and properties before transforming, signing, or uploading it. Use before any repack, convert, or upload step: resolve and read back the full path, hash lookalike candidates, check properties against the destination's limits, keep the original untouched until the copy is verified, and ask the user when the canonical file is ambiguous.",
+  "skills": [
+    "verify-before-upload"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

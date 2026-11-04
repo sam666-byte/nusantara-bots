@@ -1,0 +1,28 @@
+{
+  "name": "apple-app-review-compliance",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Audit Apple-platform applications, proposed features, code changes, App Store metadata, privacy practices, and submission readiness against Apple's current App Review Guidelines. Use during feature planning, PR review, pre-release QA, App Store rejection triage, or whenever StoreKit, HealthKit, permissions, authentication, user-generated content, or App Review policy matters.",
+  "skills": [
+    "apple-app-review-compliance"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "https://github.com/yohannescodes/apple-app-review-compliance",
+    "license": "MIT"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}

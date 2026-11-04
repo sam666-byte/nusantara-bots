@@ -1,0 +1,27 @@
+{
+  "name": "job-application-agent",
+  "kind": "skill",
+  "version": "1.0.0",
+  "description": "Applies to jobs on the user's behalf — honestly and at scale. Use when the user wants help finding and applying to jobs: parses a CV into a structured profile, maintains a one-time answer bank (CV facts, user policies, evidence-gated expertise claims), sends applications through official email channels, and prepares one-click application packages for job platforms (Glints, JobStreet, LinkedIn) where the user does the final submit. Never fabricates experience and never auto-submits on platforms.",
+  "skills": [
+    "job-application-agent"
+  ],
+  "characters": [],
+  "source": {
+    "origin": "own-build"
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "review": {
+    "required_before": [
+      "send",
+      "publish",
+      "merge",
+      "deploy",
+      "delete",
+      "change-production-data"
+    ]
+  },
+  "requires": []
+}
