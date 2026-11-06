@@ -23,6 +23,8 @@ import {
   getMemory,
   getRooms,
   getServerUrl,
+  isLocalServerUrl,
+  isPlainHttpRemoteUrl,
   persistMessage,
   persistMessageWithRetry,
   recordCost,
@@ -82,6 +84,34 @@ describe('server URL + auth token settings', () => {
     await setServerUrl('http://YOUR_SERVER:8780/');
     expect(await getServerUrl()).toBe('http://YOUR_SERVER:8780');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a server URL without an http(s) scheme', async () => {
+    await expect(setServerUrl('example.com:8780')).rejects.toThrow(
+      'http:// atau https://',
+    );
+    await expect(setServerUrl('ftp://example.com:8780')).rejects.toThrow(
+      'http:// atau https://',
+    );
+    expect(await getServerUrl()).toBe(DEFAULT_SERVER_URL);
+  });
+
+  it('accepts a remote (non-local) HTTPS server URL', async () => {
+    await setServerUrl('https://box-kamu.example:8780/');
+    expect(await getServerUrl()).toBe('https://box-kamu.example:8780');
+  });
+
+  it('classifies local vs plain-http remote server URLs', async () => {
+    expect(isLocalServerUrl('http://127.0.0.1:8780')).toBe(true);
+    expect(isLocalServerUrl('http://localhost:8780')).toBe(true);
+    expect(isLocalServerUrl('https://box-kamu.example:8780')).toBe(false);
+    // Plain http to a public host is remote and unencrypted.
+    expect(isPlainHttpRemoteUrl('http://box-kamu.example:8780')).toBe(true);
+    // https, loopback, and private-LAN http are not.
+    expect(isPlainHttpRemoteUrl('https://box-kamu.example:8780')).toBe(false);
+    expect(isPlainHttpRemoteUrl('http://127.0.0.1:8780')).toBe(false);
+    expect(isPlainHttpRemoteUrl('http://192.168.1.10:8780')).toBe(false);
+    expect(isPlainHttpRemoteUrl('http://10.0.0.5:8780')).toBe(false);
   });
 
   it('stores the auth token and clears it with an empty string', async () => {

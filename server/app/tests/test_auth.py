@@ -22,7 +22,8 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(APP_DIR))
 
 from app.auth import (TOKEN_HEADER, is_loopback, load_token,  # noqa: E402
-                      open_lan_enabled, resolve_bind, token_ok)
+                      open_lan_enabled, remote_bind_warning, resolve_bind,
+                      token_ok)
 from app.server import create_server  # noqa: E402
 
 SENTINEL_TOKEN = "TEST-TOKEN-SENTINEL-not-a-real-token"
@@ -114,6 +115,20 @@ class AuthUnitTest(unittest.TestCase):
                     open_lan_enabled({"GROKBOT_APP_OPEN_LAN": value}))
                 self.assertRaises(ValueError, resolve_bind, "0.0.0.0",
                                   None, {"GROKBOT_APP_OPEN_LAN": value})
+
+    def test_remote_bind_warning_only_for_open_lan(self):
+        # Remote bind with a token is the supported remote setup:
+        # no warning. Loopback never warns, even with OPEN_LAN.
+        self.assertIsNone(remote_bind_warning("127.0.0.1", None))
+        self.assertIsNone(remote_bind_warning("0.0.0.0", "x"))
+        self.assertIsNone(remote_bind_warning(
+            "127.0.0.1", None, {"GROKBOT_APP_OPEN_LAN": "1"}))
+        # Non-loopback + OPEN_LAN (token disabled) must warn, loudly.
+        warning = remote_bind_warning(
+            "0.0.0.0", None, {"GROKBOT_APP_OPEN_LAN": "1"})
+        self.assertIsNotNone(warning)
+        self.assertIn("PERINGATAN", warning)
+        self.assertIn("OPEN_LAN", warning)
 
     def test_open_lan_create_server_builds_without_token(self):
         tmp = tempfile.TemporaryDirectory()

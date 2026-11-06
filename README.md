@@ -162,14 +162,15 @@ cd nusantara-bots/server
 echo -n "token-rahasia-kamu" > /path/to/token
 chmod 600 /path/to/token
 
-# Jalankan server (port 8780)
-GROKBOT_APP_HOST=0.0.0.0 GROKBOT_APP_OPEN_LAN=1 GROKBOT_APP_TOKEN_FILE=/path/to/token python3 -u app/server.py
+# Jalankan server (port 8780) — dengan token, tanpa OPEN_LAN
+# (OPEN_LAN=1 justru mematikan token; itu opt-in khusus LAN tanpa token)
+GROKBOT_APP_HOST=0.0.0.0 GROKBOT_APP_TOKEN_FILE=/path/to/token python3 -u app/server.py
 ```
 
 atau pakai env var:
 
 ```bash
-GROKBOT_APP_HOST=0.0.0.0 GROKBOT_APP_OPEN_LAN=1 GROKBOT_APP_TOKEN=<token-rahasia> python3 -u app/server.py
+GROKBOT_APP_HOST=0.0.0.0 GROKBOT_APP_TOKEN=<token-rahasia> python3 -u app/server.py
 ```
 
 Lihat [server/README.md](server/README.md) untuk cara install lengkap.
@@ -185,6 +186,18 @@ Token tersimpan di luar repo (file `chmod 600` atau env var) dan tidak pernah di
 **Kalau muncul `401 - Simpan akses token dahulu`:** artinya token belum disimpan di aplikasi (atau salah). Masukkan token server yang benar di pengaturan server, simpan, lalu coba lagi.
 
 > 💡 Token akses server ini **beda** dengan API key model (BYOK). Token server = izin memakai server pendamping kamu. API key model = izin memakai model AI. Kamu butuh keduanya kalau pakai server + chat model.
+
+### Server jauh (remote) — bukan cuma lokal
+
+Server URL di aplikasi tidak dibatasi ke localhost: server di
+VPS / box cloud (mis. Instabox) yang mengekspos port 8780 bisa
+dipakai langsung. Jalankan server di box dengan token (tanpa
+`OPEN_LAN`), ekspos port 8780 lewat **HTTPS** — URL publik
+Instabox untuk port 8780, reverse proxy HTTPS, atau Tailscale —
+lalu isi URL HTTPS itu + access token di Pengaturan → Server.
+Jangan pernah pakai `GROKBOT_APP_OPEN_LAN=1` atau `http://` telanjang
+di internet publik. Panduan lengkap: [server/README.md](server/README.md)
+bagian "Server jauh (remote)".
 
 ### Runner server-side (opsional, self-hosted)
 

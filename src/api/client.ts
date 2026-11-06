@@ -36,6 +36,11 @@ import {
  * address of your own server (for example http://your-server:8780)
  * in Settings → Server URL. The stored value, once set, overrides
  * this default.
+ *
+ * The server does NOT have to be local: any reachable URL works,
+ * local (http://192.168.x.x:8780) or remote (https://box-kamu:8780,
+ * e.g. an Instabox public URL for port 8780). A remote server
+ * must use an access token — see server/README.md "Server jauh".
  */
 export const DEFAULT_SERVER_URL = 'http://YOUR_SERVER:8780';
 /** Timeout untuk persist/load chat (0.10.12) — fetch polos tanpa timeout bisa gantung selamanya. */
@@ -74,6 +79,41 @@ function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
 }
 
+/** Host part of a server URL, lower-cased, without port or path. */
+function serverUrlHost(url: string): string {
+  const withoutScheme = url.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  return withoutScheme.split('/')[0].split(':')[0].toLowerCase().replace(/^\[|\]$/g, '');
+}
+
+/** True for localhost / loopback hosts (bukan server jauh). */
+export function isLocalServerUrl(url: string): boolean {
+  const host = serverUrlHost(url);
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+/** True for a private-LAN host (192.168.x.x, 10.x.x.x, 172.16-31.x.x). */
+function isPrivateLanHost(host: string): boolean {
+  return (
+    host.startsWith('10.') ||
+    host.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) ||
+    host.endsWith('.local')
+  );
+}
+
+/**
+ * True when the server URL is plain http:// to a host that is
+ * neither loopback nor private LAN — i.e. traffic (including the
+ * access token) would travel unencrypted over the public internet.
+ * Callers should warn and suggest https:// + an access token.
+ */
+export function isPlainHttpRemoteUrl(url: string): boolean {
+  const clean = url.trim().toLowerCase();
+  if (!clean.startsWith('http://')) return false;
+  const host = serverUrlHost(url);
+  return Boolean(host) && !isLocalServerUrl(url) && !isPrivateLanHost(host);
+}
+
 export async function getServerUrl(): Promise<string> {
   const stored = await AsyncStorage.getItem(SERVER_URL_KEY);
   return stored ? normalizeBaseUrl(stored) : DEFAULT_SERVER_URL;
@@ -82,6 +122,9 @@ export async function getServerUrl(): Promise<string> {
 export async function setServerUrl(url: string): Promise<void> {
   const clean = normalizeBaseUrl(url);
   if (!clean) throw new Error('Server URL must not be empty.');
+  if (!/^https?:\/\/.+/.test(clean)) {
+    throw new Error('Server URL harus diawali http:// atau https://.');
+  }
   await AsyncStorage.setItem(SERVER_URL_KEY, clean);
 }
 

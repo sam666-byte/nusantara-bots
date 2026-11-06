@@ -128,7 +128,8 @@ from loader import (CHARACTERS_DIR, load_character, load_characters,  # noqa: E4
                     load_skills)
 from memory.store import MemoryStore, private_scope  # noqa: E402
 from mock_model import MOCK_LABEL, mock_reply  # noqa: E402
-from auth import TOKEN_HEADER, load_token, open_lan_enabled, resolve_bind, token_ok  # noqa: E402
+from auth import (TOKEN_HEADER, load_token, open_lan_enabled,  # noqa: E402
+                  remote_bind_warning, resolve_bind, token_ok)
 from legacy_client import LegacyClient, LegacyError  # noqa: E402
 from mail_client import MailClient, MailError, TEMPLATE_STEM  # noqa: E402
 from learning import LearningLoop  # noqa: E402
@@ -4221,6 +4222,8 @@ def create_server(port=0, characters_dir=None, chat_file=None, memory_db=None,
     Loopback by default. A non-loopback host without a token is
     refused here (ValueError) before any socket is opened,
     unless GROKBOT_APP_OPEN_LAN=1 (owner opt-in, LAN-open).
+    A non-loopback bind with a token is the supported remote
+    setup — see server/README.md "Server jauh (remote)".
     """
     state = AppState(characters_dir, chat_file, memory_db, bridge=bridge,
                      token=token, legacy=legacy, mail=mail,
@@ -4236,6 +4239,9 @@ def create_server(port=0, characters_dir=None, chat_file=None, memory_db=None,
         # (a configured token file/env is ignored in this mode).
         state.token = None
     resolve_bind(host, state.token)
+    warning = remote_bind_warning(host, state.token)
+    if warning:
+        print(warning, file=sys.stderr, flush=True)
     httpd = ThreadingHTTPServer((host, port), make_handler(state))
     httpd.app_state = state
     return httpd
