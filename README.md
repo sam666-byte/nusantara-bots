@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android">
-  <img src="https://img.shields.io/badge/version-0.10.17-blue?style=flat-square" alt="Version 0.10.17">
+  <img src="https://img.shields.io/badge/version-0.10.18-blue?style=flat-square" alt="Version 0.10.18">
   <img src="https://img.shields.io/badge/React%20Native-0.86-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React Native 0.86">
   <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
 </p>
@@ -43,16 +43,18 @@ Donasi dipakai untuk pengembangan aplikasi. Terima kasih atas dukungannya! 🙏
 
 ## 📥 Download APK
 
-**Silahkan download APK-nya** di halaman release:
+**v0.10.18 — APK release (arm64) sudah ada di repo ini:**
 
-👉 **[Download APK v0.10.17](https://github.com/sam666-byte/nusantara-bots/releases)**
+👉 **[Download Nusantara-0.10.18-arm64.apk](https://github.com/sam666-byte/nusantara-bots/raw/main/Nusantara-0.10.18-arm64.apk)** (38 MB)
 
-- **`nusantara-bots-0.10.17-arm64.apk`** — untuk HP Android (ARM64, kebanyakan HP).
-- **`nusantara-bots-0.10.17-x86_64.apk`** — untuk emulator (x86_64).
+- **Bisa dipakai di HP Android apapun** yang prosesornya ARM64 — Pixel, Samsung, Xiaomi, Oppo, Vivo, dan kebanyakan HP Android keluaran 5 tahun terakhir. **Bukan cuma buat HP Sam** — siapa saja bisa install.
+- File APK-nya juga ada di repo ini: Nusantara-0.10.18-arm64.apk.
+- HP 32-bit (ARMv7) dan emulator x86_64 tidak bisa pakai APK ini — butuh build terpisah (lihat [Build APK dari source](#-build-apk-dari-source)).
 
 Install APK ke HP, lalu ikuti [Cara pakai pertama kali](#-cara-pakai-pertama-kali) di bawah.
 
 ---
+
 
 ## ✨ Fitur
 
@@ -67,6 +69,16 @@ Install APK ke HP, lalu ikuti [Cara pakai pertama kali](#-cara-pakai-pertama-kal
 - **🛠️ Skill Creator** — Buat skill sendiri untuk bot kamu.
 - **⏱️ Timer & routines** — Bot bisa diingatkan dan dijadwalkan.
 - **🔐 Vault** — Kredensial layanan tersimpan di server (nama layanan saja, nilai tidak pernah tampil). Bot memakai kredensial ini untuk login otomatis.
+
+## Skill Pack - 282 Skill Agen Siap Pakai
+
+Repo ini menyertakan 282 skill agen di folder skill-pack-agency/ (koleksi agency-agents oleh msitarzewski, lisensi MIT) - persona spesialis siap pakai untuk bot kamu: riset, coding, desain, keuangan, keamanan, media sosial, dan puluhan bidang lain.
+
+Aman: skill-skill ini sudah diperiksa - tidak mengandung API key, token, kredensial, atau data pribadi apapun. Isinya murni instruksi kerja (SKILL.md) + README + LICENSE. Kamu bisa baca semuanya langsung di folder skill-pack-agency/.
+
+Cara pakai: bot mengambil skill dari folder ini sesuai tugasnya. Daftar lengkap ada di skill-pack-agency/README.md.
+
+---
 
 ## 🔑 BYOK — Bring Your Own Key
 
