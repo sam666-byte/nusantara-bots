@@ -16,7 +16,7 @@
  *   tool yang jujur — sama seperti vm_exec / bot tools).
  */
 
-import { clickViewportComputer, listElementsComputer, openComputerBrowser, scrollComputer, typeComputer, zoomComputer } from './teamComputer';
+import { clickViewportComputer, listElementsComputer, openComputerBrowser, openWebPage, scrollComputer, searchWeb, typeComputer, zoomComputer } from './teamComputer';
 import type { ChatTool, ParsedToolCall } from './byo';
 
 export const OPEN_BROWSER_TOOL_NAME = 'open_browser';
@@ -58,7 +58,7 @@ export async function executeOpenBrowserTool(call: ParsedToolCall): Promise<stri
     return 'open_browser gagal: url harus berupa URL lengkap http(s) (mis. "https://studio.youtube.com"). Browser TIDAK dibuka — jangan mengklaim browser terbuka.';
   }
   const scope = args.scope === 'private' ? 'private' : 'team';
-  const result = await openComputerBrowser(scope, url);
+  const result = await openComputerBrowser(scope, url, undefined, 'bot');
   if (!result.ok) {
     const reason = result.error ?? 'server tidak menjawab.';
     return `Browser GAGAL dibuka ke ${url}: ${reason} Jangan mengklaim browser terbuka — laporkan alasan ini ke pengguna.`;
@@ -329,4 +329,95 @@ export async function executeBrowserZoomTool(call: ParsedToolCall): Promise<stri
     return `browser_zoom gagal: ${result.error ?? 'server tidak menjawab.'} Zoom TIDAK berubah — laporkan alasan ini ke pengguna.`;
   }
   return `Zoom browser ${direction === 'in' ? 'diperbesar' : direction === 'out' ? 'diperkecil' : 'direset ke 100%'}. Layarnya tampil live di Team Computer — cek hasilnya di sana.`;
+}
+
+// ---------------------------------------------------------------------------
+// Riset spek (jalur tes): web_search + web_open (server-side, tanpa API key).
+// WAJIB dipakai dulu untuk tugas riset, sebelum menjawab apa pun.
+// Eksekutor TIDAK PERNAH throw (kegagalan jadi teks hasil tool yang jujur).
+// ---------------------------------------------------------------------------
+
+export const WEB_SEARCH_TOOL_NAME = 'web_search';
+
+export const WEB_SEARCH_TOOL: ChatTool = {
+  type: 'function',
+  function: {
+    name: WEB_SEARCH_TOOL_NAME,
+    description:
+      'Cari di web lewat server (tanpa API key) dan kembalikan daftar hasil: judul, URL, cuplikan. WAJIB dipanggil DULU untuk SEMUA tugas riset (riset, research, data terverifikasi) sebelum menulis jawaban apa pun — jangan menjawab riset dari ingatan. Sesudah search, buka sumber-sumbernya dengan web_open, lalu di jawaban final KUTIP URL sumber yang kamu buka. Bila search mengembalikan nol hasil atau gagal, laporkan riset gagal dengan jujur — jangan mengarang data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Kata kunci pencarian, mis. "produk digital terlaris Indonesia 2024".',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+export async function executeWebSearchTool(call: ParsedToolCall): Promise<string> {
+  if (!call.argsValid) {
+    return 'Argumen web_search tidak valid (bukan JSON objek). Berikan query sebagai string.';
+  }
+  const args = (call.args ?? {}) as Record<string, unknown>;
+  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  if (!query) {
+    return 'web_search gagal: query kosong. Berikan kata kunci pencarian.';
+  }
+  const result = await searchWeb(query);
+  if (!result.ok || !result.results) {
+    const reason = result.error ?? 'server tidak menjawab.';
+    return `web_search GAGAL untuk "${query}": ${reason} Jangan mengarang hasil — laporkan pencarian gagal dengan jujur.`;
+  }
+  if (result.results.length === 0) {
+    return `web_search untuk "${query}" tidak mengembalikan hasil apa pun. Jangan mengarang data — laporkan pencarian gagal dengan jujur, atau coba query lain.`;
+  }
+  const lines = result.results.map(
+    (r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`,
+  );
+  return (
+    `Hasil pencarian untuk "${query}" (${result.results.length} hasil, buka sumbernya dengan web_open sebelum menjawab):\n` +
+    lines.join('\n')
+  );
+}
+
+export const WEB_OPEN_TOOL_NAME = 'web_open';
+
+export const WEB_OPEN_TOOL: ChatTool = {
+  type: 'function',
+  function: {
+    name: WEB_OPEN_TOOL_NAME,
+    description:
+      'Baca halaman sumber dari URL hasil web_search dan kembalikan teksnya. Pakai tool ini untuk SETIAP sumber yang akan kamu kutip — klaim faktual di jawaban final WAJIB terikat ke URL yang sudah kamu buka dengan tool ini. Bila halaman gagal dibuka, laporkan URL itu sebagai gagal dibuka — jangan mengarang isinya.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL lengkap dari hasil web_search.',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+export async function executeWebOpenTool(call: ParsedToolCall): Promise<string> {
+  if (!call.argsValid) {
+    return 'Argumen web_open tidak valid (bukan JSON objek). Berikan url sebagai string.';
+  }
+  const args = (call.args ?? {}) as Record<string, unknown>;
+  const url = typeof args.url === 'string' ? args.url.trim() : '';
+  if (!/^https?:\/\/\S+$/.test(url)) {
+    return 'web_open gagal: url harus berupa URL lengkap http(s) dari hasil web_search.';
+  }
+  const result = await openWebPage(url);
+  if (!result.ok || typeof result.text !== 'string') {
+    const reason = result.error ?? 'server tidak menjawab.';
+    return `web_open GAGAL untuk ${url}: ${reason} Jangan mengarang isi halaman ini — laporkan sebagai gagal dibuka.`;
+  }
+  return `Isi halaman ${url} (${result.chars ?? result.text.length} karakter):\n${result.text}`;
 }

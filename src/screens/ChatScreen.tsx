@@ -31,16 +31,20 @@ import * as Speech from 'expo-speech';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
-import {
+import { createDelegations,
   checkCapOrAllow,
+  getActiveServerTurn,
   getCharacters,
   getChat,
   getRooms,
   persistMessage,
   persistMessageWithRetry,
+  probeRunnerPresence,
+  probeServerTurns,
   recordCost,
   sendMockChat,
   stopRoom,
+  submitServerTurn,
 } from '../api/client';
 import { getByo, streamByoReplyWithTools, wasByoEverConfigured, type ChatTool, type ParsedToolCall } from '../api/byo';
 import {
@@ -56,6 +60,7 @@ import {
   requestCredentialViaRunner,
   setCredentialHandler,
   stopTurn,
+  pruneStaleTurn,
   subscribeTurn,
   updateTurn,
 } from '../api/turnRunner';
@@ -72,6 +77,35 @@ import {
   LIST_BOTS_TOOL_NAME,
   executeBotTool,
 } from '../api/botTools';
+import {
+  CHECK_DELEGATION_STATUS_TOOL_NAME,
+  DELEGATION_TOOLS,
+  HANDOFF_TO_BOT_TOOL_NAME,
+  MESSAGE_BOT_TOOL_NAME,
+  executeDelegationStatusTool,
+  executeDelegationTool,
+} from '../api/delegationTools';
+import {
+  CREATE_ROOM_TOOL,
+  CREATE_ROOM_TOOL_NAME,
+  executeCreateRoomTool,
+} from '../api/roomTools';
+import {
+  LIST_FILES_TOOL,
+  LIST_FILES_TOOL_NAME,
+  READ_FILE_TOOL,
+  READ_FILE_TOOL_NAME,
+  executeFileTool,
+} from '../api/fileTools';
+import {
+  GET_TEAM_MEMORY_TOOL,
+  GET_TEAM_MEMORY_TOOL_NAME,
+  GET_TEAM_STATUS_TOOL,
+  GET_TEAM_STATUS_TOOL_NAME,
+  SAVE_TEAM_MEMORY_TOOL,
+  SAVE_TEAM_MEMORY_TOOL_NAME,
+  executeTeamTool,
+} from '../api/teamTools';
 import {
   ASSIGN_SKILL_TOOL,
   ASSIGN_SKILL_TOOL_NAME,
@@ -95,12 +129,18 @@ import {
   BROWSER_ZOOM_TOOL_NAME,
   OPEN_BROWSER_TOOL,
   OPEN_BROWSER_TOOL_NAME,
+  WEB_OPEN_TOOL,
+  WEB_OPEN_TOOL_NAME,
+  WEB_SEARCH_TOOL,
+  WEB_SEARCH_TOOL_NAME,
   executeBrowserClickTool,
   executeBrowserListElementsTool,
   executeBrowserScrollTool,
   executeBrowserTypeTool,
   executeBrowserZoomTool,
   executeOpenBrowserTool,
+  executeWebOpenTool,
+  executeWebSearchTool,
 } from '../api/browserTools';
 import { copyTextToClipboard } from '../api/clipboard';
 import { splitMessageSegments } from '../api/messageTables';
@@ -120,15 +160,10 @@ import {
 } from '../api/credentialTools';
 import { saveSecret, validateSecretInput } from '../api/vault';
 import { buildSystemPrompt } from '../api/systemPrompt';
-import { roomIdFor } from '../api/botChat';
-import {
-  browsePage,
-  buildPagePrompt,
-  buildWebPrompt,
-  extractUrls,
-  searchWeb,
-  splitLinkSegments,
-} from '../api/web';
+import { nextLocalId, nowIso, runSendTurn } from '../api/sendTurn';
+import { startRunnerAuto } from '../api/runnerAuto';
+import { createBotChat, roomIdFor } from '../api/botChat';
+import { splitLinkSegments } from '../api/web';
 import { DELETE_BOT_OPTIONS, deleteBot, type DeleteBotMode } from '../api/deleteBot';
 import { deleteRoomChat } from '../api/deleteRoom';
 import { cycleAvatar } from '../api/avatar';
@@ -140,6 +175,7 @@ import {
   type ThinkingState,
 } from '../api/thinking';
 import type { ChatMessage, Character } from '../api/types';
+import { ApiError } from '../api/types';
 import { GhostBlob } from '../components/GhostBlob';
 import { TypingDots } from '../components/TypingDots';
 import type { RootStackParamList } from '../navigation';
@@ -150,41 +186,35 @@ type ChatRoute = RouteProp<RootStackParamList, 'Chat'>;
 
 type UiMessage = ChatMessage & { local?: boolean; streaming?: boolean };
 
-let localId = -1;
-function nextLocalId(): number {
-  localId -= 1;
-  return localId;
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function newTaskId(): string {
-  return `chat-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-}
-
-/**
- * Deteksi niat membuat bot (0.10.13, perbaikan create_bot).
- *
- * Dipakai untuk putaran perbaikan: bila pengguna meminta membuat
- * bot tapi model TIDAK memanggil create_bot sama sekali (malah
- * mengarang klaim sukses), putaran perbaikan memaksa model
- * memanggil tool-nya. Kata kunci Bahasa Indonesia + Inggris.
- */
-function wantsCreateBot(text: string): boolean {
-  const t = text.toLowerCase();
-  // 0.10.13: kata kerja pembuatan + kata "bot"/"tim" di mana saja
-  // dalam kalimat (bukan harus berdampingan — "Buatkan 2 bot baru"
-  // punya angka di tengahnya, regex lama yang menuntut kata
-  // berdampingan tidak menangkapnya sehingga putaran perbaikan
-  // tidak jalan).
-  const hasVerb = /\b(buat|buatkan|bikin|bentuk|tambah|tambahkan|create|make)\b/.test(t);
-  const hasBot = /\b(bot|tim)\b/.test(t);
-  return hasVerb && hasBot;
-}
 
 export function ChatScreen() {
+  // Runner-auto Fase 6 (31 Okt 2026): selama layar chat terbuka,
+  // delegasi yang belum diklaim dieksekusi otomatis oleh app.
+  // Berhenti saat layar ditutup; app di-background juga menghentikan
+  // polling (AppState di modul runner).
+  // Langkah 2 fase 3: bila server mendukung turn server DAN runner
+  // server melapor hidup & segar, delegasi milik runner — app TIDAK
+  // memulai runnerAuto (menghindari dua eksekutor berebut). Klaim
+  // atomik server tetap mencegah eksekusi ganda bila keduanya sempat
+  // jalan (jendela transisi). Bila runner tidak hadir, app tetap
+  // menjalankan runnerAuto sebagai fallback.
+  useEffect(() => {
+    let alive = true;
+    let stopAuto: (() => void) | null = null;
+    (async () => {
+      const capable = await probeServerTurns();
+      if (!alive) return;
+      setServerTurnsCapable(capable);
+      let runnerPresent = false;
+      if (capable) runnerPresent = await probeRunnerPresence();
+      if (!alive) return;
+      if (!runnerPresent) stopAuto = startRunnerAuto();
+    })();
+    return () => {
+      alive = false;
+      if (stopAuto) stopAuto();
+    };
+  }, []);
   const navigation = useNavigation<Nav>();
   const route = useRoute<ChatRoute>();
   const { characterId, roomId: roomIdParam } = route.params;
@@ -197,9 +227,19 @@ export function ChatScreen() {
   const [character, setCharacter] = useState<Character | null>(null);
   const [roomName, setRoomName] = useState<string | null>(null);
   const [roomMembers, setRoomMembers] = useState<string[]>([]);
+  // Video-parity Tahap 1: daftar bot (untuk nama di baris delegasi
+  // dan header "Created by") + pembuat room saat ini.
+  const [characters, setCharacters] = useState<Character[]>([]);
+  const [roomCreatedBy, setRoomCreatedBy] = useState<string | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState('');
   const [replying, setReplying] = useState(false);
+  // Langkah 2 fase 3: turn server — bila server mendukung /api/turns,
+  // kirim lewat server (runner mengeksekusi; app tidak menjalankan
+  // loop in-app). serverTurnActive = turn server sedang jalan di
+  // room ini (indikator working + Stop terintegrasi).
+  const [serverTurnsCapable, setServerTurnsCapable] = useState(false);
+  const [serverTurnActive, setServerTurnActive] = useState(false);
   const [capBlocked, setCapBlocked] = useState(false);
   // Menu ••• sheet (lihat openMenu): Modal sendiri, bukan Alert —
   // Alert Android mentok 3 tombol sehingga "Hapus bot" tak pernah tampil.
@@ -212,13 +252,10 @@ export function ChatScreen() {
   // harus tahu, bukan menebak. Null = server terjangkau / belum ada
   // kegagalan; dibersihkan otomatis saat persist/load berhasil lagi.
   const [serverWarning, setServerWarning] = useState<string | null>(null);
-  // Toggle Web (0.9.7, permintaan Sam: bot bisa memakai kemampuan
-  // browser) — per-chat, default OFF, hanya state lokal. Saat ON,
-  // sebelum kirim ke model: pesan berisi URL -> browsePage (browser
-  // asli PC, sesi login) untuk isi halaman; pesan biasa -> searchWeb
-  // untuk hasil pencarian. Gagal = chat normal tanpa konteks web.
-  const [webEnabled, setWebEnabled] = useState(false);
-  const [searchingWeb, setSearchingWeb] = useState(false);
+  // Web ON DIHAPUS 30 Okt 2026 (perintah Sam: "Hapus aja web on, kurang
+  // penting"). Bot mencari lewat tool browser-nya sendiri (open_browser
+  // dkk), BUKAN lewat injeksi hasil pencarian app ke prompt — injeksi
+  // itu yang membajak konfirmasi singkat ("Ok") dan tugas delegasi.
   // Indikator thinking di dalam chat (0.10.7, Sam: "tambah 1 thinking
   // jadi kita tau bot kerja apa bengon") — SATU indikator yang jadi
   // sumber kebenaran aktivitas. Muncul langsung saat kirim ("Berpikir"),
@@ -250,6 +287,44 @@ export function ChatScreen() {
     }, 1000);
     return () => clearInterval(timer);
   }, [thinking]);
+
+  // Langkah 2 fase 3: pengawas turn server (10 dtk) — HANYA mengatur
+  // indikator working + Stop untuk turn yang dieksekusi runner di
+  // server. Balasan datang lewat poll chat 10 dtk yang sudah ada,
+  // yang TIDAK di-skip: replyingRef tidak pernah di-set untuk turn
+  // server (hanya state React replying). Gagal jangkau server =
+  // indikator dibiarkan (tidak dihapus atas dasar error).
+  useEffect(() => {
+    if (!serverTurnsCapable || !roomId) return;
+    let alive = true;
+    const tick = async () => {
+      let active;
+      try {
+        active = await getActiveServerTurn(roomId);
+      } catch {
+        return;
+      }
+      if (!alive) return;
+      if (active) {
+        setServerTurnActive(true);
+        setReplying(true);
+        setThinking({ phase: 'thinking' });
+        thinkingProgressRef.current = Date.now();
+      } else {
+        setServerTurnActive(false);
+        setReplying(false);
+        setThinking(null);
+      }
+    };
+    void tick();
+    const timer = setInterval(() => {
+      void tick();
+    }, 10000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [serverTurnsCapable, roomId]);
 
   const noteThinkingProgress = useCallback(() => {
     thinkingProgressRef.current = Date.now();
@@ -422,6 +497,7 @@ export function ChatScreen() {
       if (replyingRef.current) return;
       let alive = true;
       let unsubscribeTurn: (() => void) | null = null;
+      let poll: ReturnType<typeof setInterval> | null = null;
       (async () => {
         const [chars, rooms] = await Promise.all([
           getCharacters().catch(() => null),
@@ -429,6 +505,7 @@ export function ChatScreen() {
         ]);
         if (!alive) return;
         const charList = chars ?? [];
+        setCharacters(charList);
         if (characterId) {
           setCharacter(charList.find((c) => c.id === characterId) ?? null);
         }
@@ -442,7 +519,15 @@ export function ChatScreen() {
           if (room) {
             setRoomName(room.name);
             setRoomMembers(room.members ?? []);
+            setRoomCreatedBy(room.created_by ?? null);
           }
+        } else {
+          // Video-parity Tahap 1: header "Created by" juga butuh
+          // pembuat room hasil resolusi roomIdFor — nama/anggota
+          // sengaja TIDAK diubah di jalur ini supaya perilaku lama
+          // (nama tampilan bot) tidak berubah.
+          const room = roomList.find((r) => r.id === resolvedRoom);
+          if (room) setRoomCreatedBy(room.created_by ?? null);
         }
         setRoomId(resolvedRoom);
         const chat = await getChat(resolvedRoom).catch(() => {
@@ -463,11 +548,23 @@ export function ChatScreen() {
           // room ini (Sam keluar saat bot mikir), adopsi — tampilkan
           // progres live-nya, reload dari server saat turn selesai.
           unsubscribeTurn = adoptRunningTurn(resolvedRoom);
+          poll = setInterval(async () => {
+            if (!alive || replyingRef.current) return;
+            const c2 = await getChat(resolvedRoom).catch(() => null);
+            if (!alive || !c2) return;
+            setMessages((prev) => {
+              if (prev.some((m) => m.streaming)) return prev;
+              const srv = c2.messages ?? [];
+              if (srv.length <= prev.length) return prev;
+              return srv as unknown as typeof prev;
+            });
+          }, 10000);
         }
       })();
       return () => {
         alive = false;
         if (unsubscribeTurn) unsubscribeTurn();
+        if (poll) clearInterval(poll);
       };
     }, [characterId, roomIdParam, adoptRunningTurn]),
   );
@@ -776,6 +873,10 @@ export function ChatScreen() {
     }
     replyingRef.current = false;
     setReplying(false);
+    // Langkah 2 fase 3: turn server — POST /api/stop di bawah sudah
+    // membatalkan turn server (fase 1); di sini indikator langsung
+    // dibersihkan (pengawas mengonfirmasi dalam 10 dtk).
+    setServerTurnActive(false);
     setThinking(null);
     setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
     try {
@@ -810,548 +911,184 @@ export function ChatScreen() {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || replyingRef.current) return;
-    // 0.10.14: jangan mulai turn baru bila turn room ini masih jalan
-    // (dimulai layar lama, Sam kembali lalu mengetik lagi) — turn lama
-    // yang menang; layar ini mengadopsinya via turnRunner, bukan
-    // menumpuk turn kedua yang berebut persist.
-    if (isTurnRunning(roomId)) return;
-    setInput('');
-    setCapBlocked(false);
-    // Snapshot riwayat SEBELUM userMsg/streamMsg di-append (0.10.5,
-    // perbaikan "pikun"): ref berubah saat render berikutnya (setelah
-    // await di bawah), tapi snapshot ini tetap berisi turn-turn
-    // sebelumnya saja — turn saat ini TIDAK duplikat di history.
-    // Reply (0.10.6): snapshot target balasannya, lalu bersihkan bar
-    // konteks — pesan terkirim dengan reply_to + konteks kutipan ke model.
-    const reply = replyTarget;
-    if (reply) setReplyTarget(null);
-    const basePrompt = reply
-      ? `(Membalas "${reply.text.slice(0, 200)}") ${text}`
-      : text;
-    const priorMessages = messagesRef.current;
-
-    // 1. Cek batas pemakaian dulu (fail-open bila ledger tak terjangkau).
-    const who = characterId ?? roomMembers[0] ?? roomId;
-    try {
-      const cap = await checkCapOrAllow(characterId ?? roomId);
-      if (!cap.allowed) {
-        setCapBlocked(true);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nextLocalId(),
+    if (!text) return;
+    // Langkah 2 fase 3: bila server mendukung turn server, kirim
+    // lewat server (runner mengeksekusi; app tidak menjalankan loop
+    // in-app). Balasan datang lewat poll chat yang sudah ada.
+    // replyingRef TIDAK di-set untuk turn server, supaya poll tidak
+    // men-skip balasan. Tidak ada placeholder streaming lokal.
+    if (serverTurnsCapable) {
+      if (serverTurnActive) return; // input dipertahankan
+      const turnCharacter = characterId ?? roomMembers[0] ?? null;
+      if (turnCharacter) {
+        const reply = replyTarget;
+        if (reply) setReplyTarget(null);
+        try {
+          const res = await submitServerTurn({
             room: roomId,
-            character: characterId ?? null,
-            role: 'assistant',
-            text: cap.message || 'Batas pemakaian bot ini sudah tercapai. Coba lagi nanti.',
-            created_at: nowIso(),
-            local: true,
-          },
-        ]);
-        return;
-      }
-    } catch {
-      // checkCapOrAllow sudah fail-open; ini hanya pengaman.
-    }
-
-    const userMsg: UiMessage = {
-      id: nextLocalId(),
-      room: roomId,
-      character: characterId ?? null,
-      role: 'user',
-      text,
-      created_at: nowIso(),
-      local: true,
-    };
-    const streamId = nextLocalId();
-    const streamMsg: UiMessage = {
-      id: streamId,
-      room: roomId,
-      character: characterId ?? null,
-      role: 'assistant',
-      text: '',
-      created_at: nowIso(),
-      local: true,
-      streaming: true,
-    };
-    setMessages((prev) => [...prev, userMsg, streamMsg]);
-    replyingRef.current = true;
-    setReplying(true);
-    startThinking();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    // 0.10.14: daftarkan turn ke turnRunner supaya progresnya (streaming
-    // text + tool yang jalan) terlihat dari layar mana pun — Sam keluar
-    // saat bot mikir, kembali, dan melihat turn ini tetap berjalan.
-    // Generasi dipakai supaya turn lama yang akhirnya selesai tidak
-    // menimpa turn baru di room yang sama.
-    const turn = registerTurn(roomId, controller);
-    // 0.10.14: status akhir turn untuk turnRunner (subscriber me-reload
-    // saat turn selesai, apa pun hasilnya).
-    let turnStatus: 'done' | 'error' | 'stopped' = 'done';
-
-    try {
-      // 0.10.13: BYO FLAKY — SecureStore kadang gagal baca sesaat
-      // (keystore sibuk / app baru bangun) sehingga getByo() null
-      // dan app jatuh diam-diam ke MOCK (terbukti: Sam minta "list
-      // full skil kamu" dijawab MOCK padahal turn sebelumnya model
-      // asli jalan). Retry sekali sebelum menyerah; bila BYO pernah
-      // dikonfigurasi tapi kini tidak terbaca, tampilkan error JELAS
-      // (bukan MOCK) supaya Sam tahu BYO-nya bermasalah.
-      let byo = await getByo().catch(() => null);
-      if (!byo) {
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        byo = await getByo().catch(() => null);
-      }
-      if (!byo && (await wasByoEverConfigured().catch(() => false))) {
-        // BYO pernah ada tapi kini hilang/rusak — JANGAN mock
-        // diam-diam. Simpan pesan user, lalu tampilkan error jelas
-        // sebagai balasan (dan simpan juga supaya tidak hilang).
-        const errText =
-          '⚠️ BYO tidak terbaca — konfigurasi model yang sebelumnya tersimpan kini tidak bisa dibaca dari HP ini. Pesanmu tersimpan, tapi aku tidak bisa menjawab dengan model. Coba tutup lalu buka lagi aplikasi; bila masih begini, isi ulang BYO (Settings → Model API sendiri) atau minta Muse mengecek.';
-        try {
-          const savedUser = await persistMessage(roomId, characterId ?? null, text, 'user');
-          if (savedUser) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === userMsg.id ? { ...m, id: savedUser.message.id, local: false } : m)),
-            );
-          }
-        } catch {
-          setServerWarning(
-            'Server tidak terjangkau — pesan ini tidak tersimpan dan akan hilang saat keluar chat. Periksa WiFi / server.',
-          );
-        }
-        setMessages((prev) =>
-          prev.map((m) => (m.id === streamId ? { ...m, text: errText, streaming: false } : m)),
-        );
-        try {
-          const savedErr = await persistMessageWithRetry(roomId, characterId ?? null, errText, 'assistant');
-          if (savedErr) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === streamId ? { ...m, id: savedErr.message.id, local: false } : m)),
-            );
-          }
-        } catch {
-          // Balasan error gagal tersimpan — tetap tampil di layar.
-        }
-        setServerWarning(
-          'BYO tidak terbaca — model asli tidak bisa dipakai. Coba tutup-buka aplikasi, atau import ulang BYO.',
-        );
-        return;
-      }
-      if (byo) {
-        // 2a. BYO tersedia: bila toggle Web ON, ambil konteks web dulu
-        // — URL di pesan dibuka lewat browser asli PC (sesi login),
-        // pesan biasa dicari di web — lalu kirim prompt gabungan ke
-        // model. Pesan user yang tampil/disimpan tetap teks asli.
-        let modelPrompt = basePrompt;
-        if (webEnabled) {
-          setSearchingWeb(true);
-          try {
-            const urls = extractUrls(text);
-            if (urls.length > 0) {
-              const page = await browsePage(urls[0]);
-              modelPrompt = buildPagePrompt(basePrompt, page);
-            } else {
-              const results = await searchWeb(text);
-              modelPrompt = buildWebPrompt(basePrompt, results);
-            }
-          } catch {
-            // Gagal ambil konteks web = chat normal tanpa konteks.
-            modelPrompt = basePrompt;
-          } finally {
-            setSearchingWeb(false);
-          }
-        }
-        // System prompt berlapis (0.9.9, pola referensi): persona +
-        // SOUL + hierarki + gaya + skills + kemampuan. Konteks web
-        // (bila Web ON) tetap digabung ke user message seperti
-        // sebelumnya. Sandbox dicek sekali per kirim (fail-soft) dan
-        // daftar tool MCP diambil paralel: bila sandbox tersedia,
-        // model diberi tool vm_exec + paragraf komputer; bila tool
-        // MCP tersedia, model diberi tool MCP + paragraf MCP. Bila
-        // tidak ada, chat tetap jalan sebagai teks biasa.
-        const [sandbox, mcpTools] = await Promise.all([
-          checkSandboxAvailable().catch(() => ({ available: false, workspace: null })),
-          getMcpTools(),
-        ]);
-        const sandboxAvailable = sandbox.available;
-        const sandboxWorkspace = sandbox.workspace;
-        const systemPrompt = buildSystemPrompt(character, displayName, {
-          sandboxAvailable,
-          workspace: sandboxWorkspace,
-          webEnabled,
-          botToolsAvailable: true,
-          skillToolsAvailable: true,
-          mcpToolsAvailable: mcpTools.length > 0,
-          mcpToolNames: mcpTools.map((t) => t.function.name),
-        });
-        const onDelta = (full: string) => {
-          // Token pertama mengalir -> indikator thinking hilang,
-          // balasan asli yang tampil. Progres dicatat supaya timer
-          // 30 dtk tidak salah menuduh.
-          setThinking(null);
-          noteThinkingProgress();
-          setMessages((prev) => prev.map((m) => (m.id === streamId ? { ...m, text: full } : m)));
-          // 0.10.14: publikasikan teks streaming ke turnRunner supaya
-          // layar lain (Sam keluar-masuk) melihat balasan mengalir.
-          updateTurn(roomId, { text: full, thinking: '' }, turn.generation);
-        };
-        // 0.10.14: bungkus showThinkingTool — publikasikan nama tool
-        // yang sedang jalan ke turnRunner (indikator "Memakai tool"
-        // tetap terlihat di layar lain).
-        const onToolCall = (call: ParsedToolCall, round?: number) => {
-          showThinkingTool(call, round);
-          updateTurn(roomId, { thinking: call.name }, turn.generation);
-        };
-        // Tool chat (0.10.0): tool bot SELALU tersedia (create_bot /
-        // list_bots — anti-halu, hanya butuh server); tool kredensial
-        // SELALU tersedia (list_secrets / request_credential /
-        // login_service — vault, bagian G); open_browser SELALU
-        // tersedia (buka browser langsung ke URL target, bagian H);
-        // vm_exec hanya bila sandbox tersedia; tool MCP bila server
-        // menyediakannya.
-        // Router eksekutor gabungan (0.9.11 + M3 + G + H): nama tool
-        // menentukan eksekutor — vm_exec, bot tools, kredensial,
-        // open_browser, browser control, sisanya MCP. Tool tulis MCP
-        // SELALU diizinkan (ALWAYS ALLOW 0.10.7 — tanpa kartu
-        // approval); request_credential dijeda untuk form aman.
-        const tools: ChatTool[] = [
-          CREATE_BOT_TOOL,
-          LIST_BOTS_TOOL,
-          CREATE_SKILL_TOOL,
-          LIST_SKILLS_TOOL,
-          ASSIGN_SKILL_TOOL,
-          ...CREDENTIAL_TOOLS,
-          OPEN_BROWSER_TOOL,
-          BROWSER_CLICK_TOOL,
-          BROWSER_LIST_ELEMENTS_TOOL,
-          BROWSER_TYPE_TOOL,
-          BROWSER_SCROLL_TOOL,
-          BROWSER_ZOOM_TOOL,
-        ];
-        if (sandboxAvailable) tools.push(VM_EXEC_TOOL);
-        tools.push(...mcpTools);
-        const execTool = async (call: ParsedToolCall): Promise<string> => {
-          if (call.name === VM_EXEC_TOOL_NAME) return executeVmExecTool(call);
-          if (call.name === CREATE_BOT_TOOL_NAME || call.name === LIST_BOTS_TOOL_NAME) {
-            return executeBotTool(call);
-          }
-          if (
-            call.name === CREATE_SKILL_TOOL_NAME ||
-            call.name === LIST_SKILLS_TOOL_NAME ||
-            call.name === ASSIGN_SKILL_TOOL_NAME
-          ) {
-            return executeSkillTool(call);
-          }
-          if (call.name === OPEN_BROWSER_TOOL_NAME) return executeOpenBrowserTool(call);
-          if (call.name === BROWSER_CLICK_TOOL_NAME) return executeBrowserClickTool(call);
-          if (call.name === BROWSER_LIST_ELEMENTS_TOOL_NAME) return executeBrowserListElementsTool(call);
-          if (call.name === BROWSER_TYPE_TOOL_NAME) return executeBrowserTypeTool(call);
-          if (call.name === BROWSER_SCROLL_TOOL_NAME) return executeBrowserScrollTool(call);
-          if (call.name === BROWSER_ZOOM_TOOL_NAME) return executeBrowserZoomTool(call);
-          if (
-            call.name === LIST_SECRETS_TOOL_NAME ||
-            call.name === REQUEST_CREDENTIAL_TOOL_NAME ||
-            call.name === LOGIN_SERVICE_TOOL_NAME
-          ) {
-            // 0.10.14: lewat turnRunner — bila layar ini tidak fokus
-            // (turn jalan di background), request resolve {saved:false}
-            // alih-alih menggantung menunggu form yang tidak terlihat.
-            return executeCredentialTool(call, requestCredentialViaRunner);
-          }
-          return executeMcpTool(call, allowAllTools);
-        };
-        // Batas waktu eksekusi tool (0.10.5): satu tool yang menggantung
-        // — terbukti di emulator, MCP filesystem membaca direktori besar
-        // sampai >4 menit tanpa jawaban sementara server baru timeout di
-        // 600 dtk — tidak boleh membekukan chat. Setelah 180 dtk,
-        // kembalikan teks timeout supaya model bisa menjawab dari yang
-        // sudah diketahui, bukan menggantung tanpa kabar. Tool yang
-        // asli tetap jalan di server sampai timeout-nya sendiri; yang
-        // dibatasi di sini hanya penantian di aplikasi.
-        const TOOL_CALL_TIMEOUT_MS = 180_000;
-        const execToolWithTimeout = async (call: ParsedToolCall): Promise<string> => {
-          let timer: ReturnType<typeof setTimeout> | null = null;
-          try {
-            return await Promise.race([
-              execTool(call),
-              new Promise<string>((resolve) => {
-                timer = setTimeout(
-                  () =>
-                    resolve(
-                      `Tool ${call.name} timeout setelah 180 detik — hasilnya tidak tersedia. ` +
-                        'Jawab dari yang sudah diketahui, jangan mengulang tool yang sama.',
-                    ),
-                  TOOL_CALL_TIMEOUT_MS,
-                );
-              }),
-            ]);
-          } finally {
-            if (timer) clearTimeout(timer);
-          }
-        };
-        // Simpan pesan user SEBELUM memanggil model (0.10.5): di versi
-        // lama pesan user baru dipersist setelah balasan selesai —
-        // bila balasan gagal / di-STOP di tengah jalan (terbukti di
-        // emulator: turn "Di mana file analytics..." hilang dari
-        // server), pertanyaan ikut hilang dari riwayat. Offline-first:
-        // gagal simpan tidak menggagalkan chat — tapi mulai 0.10.12
-        // kegagalan DITAMPILKAN sebagai banner (serverWarning) supaya
-        // user tahu pesannya tidak tersimpan, bukan diam-diam hilang
-        // saat keluar-masuk chat.
-        try {
-          const savedUser = await persistMessage(
-            roomId,
-            characterId ?? null,
+            character: turnCharacter,
             text,
-            'user',
-            reply ? String(reply.id) : undefined,
-          );
-          if (savedUser) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === userMsg.id ? { ...m, id: savedUser.message.id, local: false } : m)),
-            );
-            setServerWarning(null);
+            replyTo: reply ? String(reply.id) : undefined,
+            idempotencyKey: `srv:${roomId}:${Date.now()}:${Math.floor(Math.random() * 10000)}`,
+          });
+          setInput('');
+          setMessages((prev) => [...prev, { ...res.user_message, local: false }]);
+          setServerTurnActive(true);
+          setReplying(true);
+          setThinking({ phase: 'thinking' });
+          thinkingProgressRef.current = Date.now();
+          setServerWarning(null);
+          return;
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409) {
+            // Turn masih jalan/antre di room ini — input
+            // dipertahankan, indikator dinyalakan (pengawas
+            // mengonfirmasi dari status server).
+            setServerTurnActive(true);
+            setReplying(true);
+            setThinking({ phase: 'thinking' });
+            thinkingProgressRef.current = Date.now();
+            return;
           }
-        } catch {
-          // Offline-first: pesan tetap tampil walau gagal tersimpan,
-          // tapi user HARUS tahu (0.10.12).
-          setServerWarning(
-            'Server tidak terjangkau — pesan ini tidak tersimpan dan akan hilang saat keluar chat. Periksa WiFi / server.',
-          );
-        }
-        let res = await streamByoReplyWithTools(byo, modelPrompt, {
-          tools,
-          execTool: execToolWithTimeout,
-          systemPrompt,
-          // Riwayat chat (0.10.5, perbaikan "pikun"): turn-turn
-          // sebelumnya supaya model ingat konteks ("Iya legal" =
-          // jawaban atas pertanyaan sebelumnya, bukan kata untuk
-          // didefinisikan). Batas 20 pesan terakhir ditegakkan di
-          // byo.ts (takeRecentHistory); pesan kosong / system
-          // disaring di sana juga.
-          history: priorMessages
-            .filter(
-              (m) =>
-                (m.role === 'user' || m.role === 'assistant') &&
-                m.text.trim().length > 0,
-            )
-            .map((m) => ({ role: m.role, content: m.text })),
-          onDelta,
-          onToolCall,
-          abortSignal: controller.signal,
-        });
-        // 0.10.13: PUTARAN PERBAIKAN create_bot — bila pengguna
-        // meminta membuat bot tapi model TIDAK memanggil create_bot
-        // sama sekali (malah mengarang klaim sukses — terbukti di
-        // emulator: "Konten Bot" + "Analisa Bot" diklaim dibuat
-        // padahal server tidak punya), jalankan SATU putaran lagi
-        // yang memaksa model memanggil create_bot. Teks karangan
-        // putaran pertama dibuang, diganti hasil putaran perbaikan
-        // (yang jujur — bot benar-benar dibuat atau gagal jujur).
-        const didCreateBot = (res.toolCalls ?? []).some(
-          (c) => c.name === CREATE_BOT_TOOL_NAME,
-        );
-        if (wantsCreateBot(text) && !didCreateBot && !controller.signal.aborted) {
-          try {
-            const repair = await streamByoReplyWithTools(
-              byo,
-              `PERINTAH PERBAIKAN — kamu diminta membuat bot ("${text.slice(0, 200)}") tapi kamu BELUM memanggil tool create_bot sama sekali. JANGAN percaya riwayat chat yang mengklaim bot sudah dibuat — riwayat itu bisa berisi karanganmu sendiri. Cek dulu dengan list_bots, lalu panggil create_bot SEKARANG untuk setiap bot yang diminta dan belum ada (satu panggilan per bot, jangan menulis rencana dulu). Setelah tool mengembalikan hasil, laporkan nama + id bot yang dibuat.`,
+          if (e instanceof ApiError && e.status === 429) {
+            setCapBlocked(true);
+            setMessages((prev) => [
+              ...prev,
               {
-                tools,
-                execTool: execToolWithTimeout,
-                systemPrompt,
-                history: priorMessages
-                  .filter(
-                    (m) =>
-                      (m.role === 'user' || m.role === 'assistant') &&
-                      m.text.trim().length > 0,
-                  )
-                  .map((m) => ({ role: m.role, content: m.text }))
-                  .concat([{ role: 'user', content: text }]),
-                onDelta,
-                onToolCall,
-                abortSignal: controller.signal,
+                id: nextLocalId(),
+                room: roomId,
+                character: characterId ?? null,
+                role: 'assistant',
+                text:
+                  e.message ||
+                  'Batas pemakaian bot ini sudah tercapai. Coba lagi nanti.',
+                created_at: nowIso(),
+                local: true,
               },
-            );
-            res = repair;
-          } catch {
-            // Perbaikan gagal — pakai hasil putaran pertama apa adanya.
+            ]);
+            return;
           }
-        }
-        // 0.10.14: PUTARAN PERBAIKAN eksekusi tugas — bila pengguna
-        // meminta MENGERJAKAN sesuatu tapi model TIDAK memanggil tool
-        // sama sekali dan balasannya tampak seperti rencana (terbukti:
-        // Web Bughunter Alpha menulis rencana recon pump.fun tanpa
-        // menjalankan apa pun), jalankan SATU putaran lagi yang memaksa
-        // model memanggil tool. Teks rencana putaran pertama dibuang,
-        // diganti hasil putaran perbaikan (hasil nyata dari tool, atau
-        // gagal jujur). Tidak jalan bila putaran create_bot di atas
-        // sudah memanggil tool (res.toolCalls sudah berisi).
-        const didAnyTool = (res.toolCalls ?? []).length > 0;
-        if (
-          wantsTaskExecution(text) &&
-          !didAnyTool &&
-          looksLikePlanOnly(res.text) &&
-          !controller.signal.aborted
-        ) {
-          try {
-            const repair = await streamByoReplyWithTools(
-              byo,
-              buildTaskExecutionRepairPrompt(text),
-              {
-                tools,
-                execTool: execToolWithTimeout,
-                systemPrompt,
-                history: priorMessages
-                  .filter(
-                    (m) =>
-                      (m.role === 'user' || m.role === 'assistant') &&
-                      m.text.trim().length > 0,
-                  )
-                  .map((m) => ({ role: m.role, content: m.text }))
-                  .concat([{ role: 'user', content: text }]),
-                onDelta,
-                onToolCall,
-                abortSignal: controller.signal,
-              },
-            );
-            res = repair;
-          } catch {
-            // Perbaikan gagal — pakai hasil putaran pertama apa adanya.
-          }
-        }
-        const finalText = res.text;
-        setMessages((prev) =>
-          prev.map((m) => (m.id === streamId ? { ...m, text: finalText, streaming: false } : m)),
-        );
-        if (!controller.signal.aborted) {
-          try {
-            const savedAsst = await persistMessageWithRetry(roomId, characterId ?? null, finalText, 'assistant');
-            if (savedAsst) {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === streamId ? { ...m, id: savedAsst.message.id, local: false } : m)),
-              );
-              setServerWarning(null);
-            }
-          } catch {
-            // Sama seperti di atas — user harus tahu (0.10.12).
+          // Server MENJAWAB tapi menolak pesan (mis. 400) — tampilkan
+          // alasan aslinya, bukan "tidak terjangkau": servernya nyambung.
+          if (e instanceof ApiError) {
             setServerWarning(
-              'Server tidak terjangkau — balasan ini tidak tersimpan dan akan hilang saat keluar chat. Periksa WiFi / server.',
+              e.message
+                ? `Server menolak pesan: ${e.message}`
+                : 'Server menolak pesan. Coba lagi.',
             );
+            return;
           }
-          if (res.usage) {
-            try {
-              await recordCost({
-                bot: characterId ?? roomId,
-                taskId: newTaskId(),
-                taskKind: 'chat',
-                model: byo.model,
-                usage: res.usage,
-              });
-            } catch {
-              // Gagal mencatat cost tidak menggagalkan chat.
-            }
-          }
-        }
-      } else {
-        // 2b. Tanpa BYO: balasan mock. Server SUDAH menyimpan pesan user
-        // + balasan (POST /api/chat), jadi tidak ada persistMessage lagi.
-        // Jalur mock butuh character yang valid: untuk room tanpa satu
-        // bot, pakai anggota pertama room sebagai penjawab.
-        const res = await sendMockChat(roomId, who, text);
-        setThinking(null);
-        if (!res) {
-          setMessages((prev) => prev.filter((m) => m.id !== streamId && m.id !== userMsg.id));
-          throw new Error('Server menjawab 401 — simpan access token dulu.');
-        }
-        if (controller.signal.aborted) {
-          setMessages((prev) => prev.filter((m) => m.id !== streamId));
-        } else {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === userMsg.id ? { ...m, id: res.user_message.id, local: false } : m)),
-          );
-          runTypewriter(res.assistant_message.text, streamId, res.assistant_message.id);
+          // Jaringan/server gagal: input dipertahankan supaya bisa
+          // kirim ulang manual; banner serverWarning menjelaskan.
+          setServerWarning('Server tidak terjangkau — pesan tidak terkirim. Coba lagi.');
           return;
         }
       }
-    } catch (e) {
-      const aborted = e instanceof Error && e.name === 'AbortError';
-      // 0.10.14: catat status akhir untuk turnRunner.
-      turnStatus = aborted ? 'stopped' : 'error';
-      // 0.10.13: balasan PARSIAL yang sudah mengalir (via onDelta)
-      // TETAP disimpan walau stream di-abort (STOP / keluar) atau
-      // gagal (jaringan putus saat bot kerja). Sebelumnya balasan
-      // hanya dipersist bila stream selesai utuh DAN tidak di-abort —
-      // teks parsial hilang saat keluar-masuk chat. Ambil teks
-      // parsial dari state lokal terakhir.
-      const partial = messagesRef.current.find((m) => m.id === streamId)?.text?.trim() ?? '';
-      if (partial) {
-        try {
-          const savedAsst = await persistMessageWithRetry(roomId, characterId ?? null, partial, 'assistant');
-          if (savedAsst) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === streamId ? { ...m, id: savedAsst.message.id, local: false, streaming: false } : m,
-              ),
-            );
-            setServerWarning(null);
-          } else {
-            setMessages((prev) => prev.map((m) => (m.id === streamId ? { ...m, streaming: false } : m)));
-          }
-        } catch {
-          setMessages((prev) => prev.map((m) => (m.id === streamId ? { ...m, streaming: false } : m)));
-          setServerWarning(
-            'Server tidak terjangkau — balasan parsial ini tidak tersimpan dan akan hilang saat keluar chat. Periksa WiFi / server.',
-          );
-        }
-      } else if (!aborted) {
-        // 0.10.14: error tanpa teks parsial — SIMPAN ke server (retry),
-        // bukan hanya tampil lokal. Sebelumnya pesan error ini hanya
-        // di-set lewat setMessages; bila layar sudah unmount (Sam keluar
-        // saat bot mikir), error itu hilang total dan Sam melihat chat
-        // kosong tanpa penjelasan. Persist memastikan Sam melihat
-        // alasannya saat kembali.
-        const errText =
-          e instanceof Error ? e.message : 'Gagal mendapat balasan. Periksa koneksi lalu coba lagi.';
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === streamId ? { ...m, text: m.text || errText, streaming: false } : m,
-          ),
-        );
-        try {
-          const savedErr = await persistMessageWithRetry(roomId, characterId ?? null, errText, 'assistant');
-          if (savedErr) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === streamId ? { ...m, id: savedErr.message.id, local: false } : m)),
-            );
-            setServerWarning(null);
-          }
-        } catch {
-          setServerWarning(
-            'Server tidak terjangkau — balasan ini tidak tersimpan dan akan hilang saat keluar chat. Periksa WiFi / server.',
-          );
-        }
-      } else {
-        // Abort tanpa teks parsial — hapus bubble kosong.
-        setMessages((prev) => prev.filter((m) => m.id !== streamId));
-      }
-    } finally {
-      replyingRef.current = false;
-      setReplying(false);
-      setThinking(null);
-      abortRef.current = null;
-      // 0.10.14: tandai turn selesai di turnRunner — subscriber (layar
-      // yang mengadopsi turn ini) me-reload dari server dan menampilkan
-      // balasan final. Generasi memastikan turn lama tidak menimpa turn
-      // baru. No-op bila tidak ada turn terdaftar.
-      completeTurn(roomId, turnStatus, turn.generation);
+      // Tanpa bot valid di room: server turn butuh character —
+      // jatuh kembali ke loop in-app di bawah (perilaku lama).
     }
-  }, [input, roomId, characterId, roomMembers, runTypewriter, webEnabled, allowAllTools, requestCredential, replyTarget, startThinking, showThinkingTool, noteThinkingProgress]);
+    // Langkah 2: alur turn tinggal di sendTurn.ts (dipakai app + runner
+    // server) — wrapper ini hanya mengisi host app (setter React + ref
+    // + SecureStore HP + jalur mock). Perilaku tidak berubah.
+    await runSendTurn(
+      {
+        roomId,
+        characterId: characterId ?? null,
+        roomMembers,
+        character,
+        displayName,
+        characters,
+        allowAllTools,
+        priorMessages: messagesRef.current,
+        replyTarget,
+        allowMock: true,
+        clearInput: () => setInput(''),
+        clearReplyTarget: () => setReplyTarget(null),
+        setCapBlocked,
+        setReplying: (b) => {
+          replyingRef.current = b;
+          setReplying(b);
+        },
+        setThinking,
+        setServerWarning,
+        updateMessages: (fn) => setMessages(fn),
+        getStreamText: (id) => messagesRef.current.find((m) => m.id === id)?.text ?? '',
+        startThinking,
+        noteThinkingProgress,
+        showThinkingTool,
+        runTypewriter,
+        requestCredential: requestCredentialViaRunner,
+        persistMessage: (room, ch, t, role, replyTo) => persistMessage(room, ch, t, role, replyTo),
+        persistMessageWithRetry: (room, ch, t, role, replyTo) =>
+          persistMessageWithRetry(room, ch, t, role, replyTo),
+        sendMock: (room, ch, t) => sendMockChat(room, ch, t),
+        isBusy: () => replyingRef.current,
+        setAbortController: (c) => {
+          abortRef.current = c;
+        },
+      },
+      text,
+    );
+  }, [input, roomId, characterId, roomMembers, character, displayName, characters, allowAllTools, replyTarget, runTypewriter, startThinking, showThinkingTool, noteThinkingProgress, serverTurnsCapable, serverTurnActive]);
 
   const renderItem = ({ item }: { item: UiMessage }) => {
+    // Video-parity Tahap 1: pesan delegasi dirender sebagai baris
+    // khusus yang bisa di-tap, BUKAN bubble chat biasa.
+    // - Di room Chief: "Messaged <Spesialis> >" (+ "Working..." sampai
+    //   ringkasan "Hasil dari <Spesialis>:" kembali ke room ini).
+    // - Di room spesialis: "Message from <Chief> >".
+    // Tap -> pindah ke room 1-1 target (dibuatkan bila belum ada).
+    if (item.kind === 'delegation' && item.target_character) {
+      const targetId = item.target_character;
+      const targetName = characters.find((c) => c.id === targetId)?.name ?? targetId;
+      const chiefName =
+        characters.find((c) => c.id === item.created_by)?.name ?? item.created_by ?? '';
+      const isTargetRoom = targetId === botId;
+      const label = isTargetRoom ? `Message from ${chiefName} >` : `Messaged ${targetName} >`;
+      const resultBack = messages.some(
+        (m) =>
+          m.id > item.id &&
+          typeof m.text === 'string' &&
+          m.text.startsWith(`Hasil dari ${targetName}:`),
+      );
+      const working = !isTargetRoom && !resultBack;
+      const openTarget = () => {
+        void (async () => {
+          try {
+            const rooms = (await getRooms()) ?? [];
+            let targetRoomId = roomIdFor(targetId, rooms);
+            if (targetRoomId === 'general') {
+              const targetChar = characters.find((c) => c.id === targetId);
+              if (targetChar) {
+                const created = await createBotChat(targetChar);
+                if (created.roomId) targetRoomId = created.roomId;
+              }
+            }
+            navigation.navigate('Chat', { characterId: targetId, roomId: targetRoomId });
+          } catch {
+            navigation.navigate('Chat', { characterId: targetId });
+          }
+        })();
+      };
+      return (
+        <View style={[styles.msgRow, styles.msgRowBot]}>
+          <View style={styles.msgAvatar}>
+            <GhostBlob botId={targetId} size={sizes.blobMessage} state="idle" />
+          </View>
+          <Pressable
+            style={[styles.bubble, styles.bubbleBot]}
+            onPress={openTarget}
+            accessibilityLabel={`Buka chat ${targetName}`}
+          >
+            <Text style={[styles.bubbleName, { color: accent }]}>{label}</Text>
+            <Text style={styles.bubbleText} numberOfLines={2}>
+              {item.text}
+            </Text>
+            {working ? <Text style={styles.bubbleText}>Working...</Text> : null}
+          </Pressable>
+        </View>
+      );
+    }
     const isUser = item.role === 'user';
     const reaction = reactions[String(item.id)];
     return (
@@ -1494,6 +1231,17 @@ export function ChatScreen() {
         </Pressable>
       </Modal>
 
+      {roomCreatedBy &&
+      roomCreatedBy !== 'user' &&
+      roomCreatedBy !== 'system' &&
+      roomCreatedBy !== botId ? (
+        <View style={{ paddingHorizontal: 16, paddingBottom: 4 }}>
+          <Text style={{ fontSize: 12, opacity: 0.7 }}>
+            Created by {characters.find((c) => c.id === roomCreatedBy)?.name ?? roomCreatedBy}
+          </Text>
+        </View>
+      ) : null}
+
       {capBlocked ? (
         <View style={styles.capBanner}>
           <Text style={styles.capText}>Batas pemakaian tercapai — pesan tidak dikirim.</Text>
@@ -1536,18 +1284,6 @@ export function ChatScreen() {
         }
       />
 
-      <View style={styles.webBar}>
-        <Pressable
-          style={[styles.webChip, webEnabled && styles.webChipOn]}
-          onPress={() => setWebEnabled((v) => !v)}
-          accessibilityLabel="Toggle pencarian web"
-        >
-          <Text style={[styles.webChipText, webEnabled && styles.webChipTextOn]}>
-            🌐 Web {webEnabled ? 'ON' : 'OFF'}
-          </Text>
-        </Pressable>
-        {searchingWeb ? <Text style={styles.webSearching}>🌐 Mencari web…</Text> : null}
-      </View>
 
       {/* ALWAYS ALLOW (0.10.7, Sam): tidak ada lagi kartu approval
           tool tulis — semua tool jalan langsung tanpa Izinkan/Tolak. */}
@@ -2016,34 +1752,6 @@ const styles = StyleSheet.create({
     fontSize: type.small,
     fontWeight: '700',
     marginTop: 4,
-  },
-  webBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
-    gap: spacing.sm,
-  },
-  webChip: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-  },
-  webChipOn: {
-    backgroundColor: colors.accent,
-  },
-  webChipText: {
-    color: colors.muted,
-    fontSize: type.small,
-    fontWeight: '700',
-  },
-  webChipTextOn: {
-    color: colors.black,
-  },
-  webSearching: {
-    color: colors.accent,
-    fontSize: type.small,
   },
   approvalCard: {
     marginHorizontal: spacing.lg,

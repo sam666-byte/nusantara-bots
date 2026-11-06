@@ -63,7 +63,10 @@ export async function createBotChat(
     name: string;
     members?: string[];
     mode?: 'chat' | 'meeting' | 'space';
+    created_by?: string;
   }) => Promise<Room | null> = createRoom,
+  /** Video-parity Tahap 1: Chief pembuat bot (untuk "Created by"). */
+  createdBy?: string,
 ): Promise<BotChatTarget> {
   const fallback: BotChatTarget = { characterId: bot.id, title: bot.name };
   try {
@@ -71,6 +74,7 @@ export async function createBotChat(
       name: bot.name,
       members: [bot.id],
       mode: 'chat',
+      created_by: createdBy,
     });
     if (!room) return fallback;
     return { roomId: room.id, characterId: bot.id, title: bot.name };

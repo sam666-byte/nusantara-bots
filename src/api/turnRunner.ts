@@ -46,6 +46,8 @@ export interface TurnSnapshot {
    * (balapan STOP → kirim baru → finally turn lama).
    */
   generation: number;
+  /** Waktu turn didaftarkan (ms epoch) — untuk batas usia maksimum. */
+  createdAt: number;
 }
 
 export type TurnListener = (snap: TurnSnapshot) => void;
@@ -103,6 +105,7 @@ export function registerTurn(
     thinking: '',
     updatedAt: Date.now(),
     generation: ++generationCounter,
+    createdAt: Date.now(),
   };
   turns.set(roomId, snap);
   notify(roomId);
@@ -187,6 +190,40 @@ export function stopTurn(roomId: string): boolean {
     completeTurn(roomId, 'stopped');
   }
   return true;
+}
+
+/**
+ * Turn dianggap basi bila tidak ada progres (updateTurn) selama ini.
+ * Turn kirim langsung selalu update lewat onDelta/onToolCall selagi
+ * hidup — token mengalir, tool melapor — jadi 3 menit sunyi = mati
+ * (mis. model 429 lalu stream tak kunjung selesai). Batas usia total
+ * menjaga dari loop tool yang update terus tapi tak pernah selesai.
+ */
+export const STALE_TURN_MS = 3 * 60 * 1000;
+export const MAX_TURN_MS = 30 * 60 * 1000;
+
+/**
+ * Bersihkan turn 'running' yang sudah mati (basi / terlalu tua).
+ * Mengembalikan true bila ada turn yang dibersihkan. Dipanggil send()
+ * sebelum guard isTurnRunning supaya turn menggantung tidak memblokir
+ * kirim selamanya. Turn yang masih hidup (update < 3 menit, usia
+ * < 30 menit) TIDAK disentuh.
+ */
+export function pruneStaleTurn(roomId: string): boolean {
+  const snap = turns.get(roomId);
+  if (!snap || snap.status !== 'running') return false;
+  const age = Date.now() - snap.createdAt;
+  const idle = Date.now() - snap.updatedAt;
+  if (idle > STALE_TURN_MS || age > MAX_TURN_MS) {
+    console.warn(
+      '[turnRunner] membersihkan turn menggantung',
+      roomId,
+      { idleMs: idle, ageMs: age },
+    );
+    completeTurn(roomId, 'stopped');
+    return true;
+  }
+  return false;
 }
 
 /** Apakah ada turn yang sedang berjalan di room ini. */

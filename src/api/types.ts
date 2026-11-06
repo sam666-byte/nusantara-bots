@@ -60,6 +60,15 @@ export interface ChatMessage {
   /** ISO-8601 UTC timestamp, e.g. "2026-10-25T07:00:00Z". */
   created_at: string;
   presence?: PresenceEvent[];
+  /** Video-parity Tahap 1: 'message' (default, bila tidak ada) atau
+   * 'delegation' (pesan delegasi Chief -> spesialis, dieksekusi runner). */
+  kind?: 'message' | 'delegation';
+  /** Video-parity Tahap 1: bot tujuan pesan delegasi (id bot). */
+  target_character?: string | null;
+  /** Video-parity Tahap 1: siapa yang membuat pesan/room ini. */
+  created_by?: string | null;
+  /** Video-parity Tahap 1: id pesan sumber delegasi (bila ada). */
+  source_message_id?: number | string | null;
 }
 
 /**
@@ -76,6 +85,8 @@ export interface Room {
   name: string;
   mode: 'chat' | 'meeting' | 'space';
   members: string[];
+  /** Video-parity Tahap 1: siapa yang membuat room ini. */
+  created_by?: string | null;
   decisions?: Array<{ decision: string; disputed?: string; created_at: string }>;
   disputed?: Array<{ point: string; created_at: string }>;
   stopped?: boolean;
@@ -180,6 +191,26 @@ export interface CostRecord {
   day?: string;
   cost_usd?: number;
   [key: string]: unknown;
+}
+
+/** Langkah 2: satu record turn server (/api/turns). */
+export interface ServerTurn {
+  id: number;
+  room: string;
+  character: string;
+  text: string;
+  reply_to?: string | null;
+  user_message_id?: number | null;
+  idempotency_key?: string | null;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+  created_at?: string | null;
+  claimed_at?: string | null;
+  completed_at?: string | null;
+  heartbeat_at?: string | null;
+  claim_token?: string | null;
+  worker?: string | null;
+  result?: string | null;
+  error?: string | null;
 }
 
 /** Error thrown for non-2xx server responses (other than 401). */

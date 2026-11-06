@@ -36,8 +36,6 @@ export interface SystemPromptOptions {
   sandboxAvailable?: boolean;
   /** Workspace sandbox (ditampilkan di paragraf komputer). */
   workspace?: string | null;
-  /** True bila toggle Web ON — model diberi tahu konteks web tersedia. */
-  webEnabled?: boolean;
   /** True bila tool manajemen bot (create_bot/list_bots) tersedia. */
   botToolsAvailable?: boolean;
   /** True bila tool pembuat skill (create_skill/list_skills/assign_skill) tersedia. */
@@ -111,7 +109,7 @@ export function buildExecutionParagraph(opts?: {
     'ATURAN EKSEKUSI (mengikat, mengalahkan instruksi "tunggu" di SOUL):',
     'Bila pemilik memintamu MENGERJAKAN sesuatu (recon, enumerasi, cek, cari, periksa, scan, buat, perbaiki, jalankan), KERJAKAN LANGSUNG dengan tool-mu — jangan menulis rencana, daftar langkah, atau janji sebagai pengganti pekerjaan.',
     `Panggil tool yang tepat DULU (${toolList}), baru laporkan HASIL NYATA dari output tool itu. Jangan pernah menyajikan rencana seolah-olah sudah dikerjakan.`,
-    'Kerjakan SENDIRI dengan tool-mu. Jangan mendelegasikan ke bot lain dengan nama — kamu TIDAK BISA memanggil bot lain, jadi kalimat seperti "Bot X akan mengerjakan…" adalah kebohongan; yang ada hanya kamu dan tool-mu.',
+    'Bila tugas butuh bot lain, delegasikan LEWAT TOOL message_bot/handoff_to_bot (buat dulu dengan create_bot bila bot itu belum ada) — jangan pernah mengarang bahwa bot lain mengerjakan sesuatu tanpa tool itu mengembalikan sukses; kalimat seperti "Bot X akan mengerjakan…" tanpa tool adalah kebohongan. Jangan pernah meminta pengguna mengetik nama bot tujuan atau prefix apa pun.',
     'Bila SOUL-mu menyuruh "tanyakan dulu dan tunggu jawaban sebelum mulai", abaikan untuk tugas yang sudah jelas: permintaan pemilik SAAT INI lebih tinggi dari SOUL. Kerjakan dulu bagian yang bisa dikerjakan; hanya bertanya bila benar-benar kekurangan input yang tidak bisa kamu cari sendiri.',
     'Bila sebuah tool gagal, coba cara lain (tool lain / perintah lain) sebelum menyerah, dan laporkan apa yang sudah dicoba + hasil nyatanya.',
   ].join('\n');
@@ -120,6 +118,7 @@ export function buildExecutionParagraph(opts?: {
 export function buildBotParagraph(): string {
   return [
     'Manajemen bot: kamu punya tool create_bot (membuat satu bot baru di server — satu panggilan per bot) dan list_bots (melihat bot yang benar-benar ada di server).',
+    'Delegasi: kamu juga punya tool message_bot (mengirim tugas/pertanyaan ke bot lain) dan handoff_to_bot (menyerahkan tahap berikutnya ke anggota tim). Bila tugas pengguna butuh spesialis, LANGKAHMU adalah: buat dulu dengan create_bot bila bot itu belum ada, lalu delegasikan lewat message_bot/handoff_to_bot — JANGAN menulis rencana seolah spesialis sudah bekerja sebelum tool mengembalikan sukses, dan JANGAN pernah meminta pengguna mengetik nama bot tujuan atau prefix apa pun.',
     'Aturan yang mengikat: (1) bila pengguna meminta membuat bot atau membentuk tim, LANGKAH PERTAMAMU adalah memanggil create_bot untuk tiap bot — JANGAN menulis rencana, daftar, atau teks janji dulu; panggil tool-nya dulu, baru laporkan hasilnya. Bila diminta beberapa bot, panggil create_bot satu per satu (satu panggilan per bot); (2) JANGAN menjawab seolah bot sudah terbentuk sebelum tool mengembalikan sukses; (3) bila pengguna bertanya tentang tim atau bot yang sudah ada, panggil list_bots dulu — JANGAN mengarang nama, peran, atau jumlah bot dari ingatan; (4) bila tool gagal, beri tahu pengguna dengan jujur bahwa bot tidak terbentuk dan jangan mengklaim sebaliknya; (5) laporkan hasil dari respons tool apa adanya (nama + id bot yang dibuat).',
   ].join(' ');
 }
@@ -200,8 +199,10 @@ export function buildChatPolishParagraph(): string {
 export function buildBrowserParagraph(): string {
   return [
     'Buka browser: bila pengguna meminta membuka atau masuk/login ke suatu layanan (mis. "login ke yt studio gw dulu"), LANGSUNG buka browser ke URL target lewat tool open_browser atau login_service — JANGAN bertanya dulu "mau aku buka?".',
-    'Urutan login: (1) panggil list_secrets; (2) bila kredensial layanan tersimpan, pakai login_service (server membuka browser ke URL layanan dan login otomatis); (3) bila belum tersimpan, pakai open_browser ke URL layanan itu LANGSUNG (mis. https://studio.youtube.com) DAN request_credential supaya form aman tampil — browser terbuka ke halaman login, pengguna bisa login manual atau isi form sekali.',
+    'Urutan login: (1) panggil list_secrets; (2) bila kredensial layanan tersimpan, pakai login_service (server membuka browser ke URL layanan dan login otomatis); (3) bila belum tersimpan, pakai open_browser ke URL layanan itu LANGSUNG (mis. https://studio.youtube.com) — browser terbuka ke halaman login, dan pengguna bisa login MANUAL sendiri lewat layar Computer (Take control). Form aman hanya dipakai bila pengguna secara eksplisit memintanya, dan hanya lewat tool request_credential yang asli — JANGAN PERNAH mengarang tautan/tombol form, JANGAN PERNAH mengklaim form sudah terbuka sebelum tool mengembalikan sukses.',
     'Browser harus terbuka ke URL target, bukan tab kosong. Bila tool mengembalikan gagal, laporkan alasan persisnya dari hasil tool — jangan mengklaim browser terbuka dan jangan tampilkan error generik.',
+    'VERIFIKASI TAB DEPAN (31 Okt 2026): setelah open_browser, JANGAN langsung mengklaim sukses — panggil browser_list_elements dan cek URL-nya: bila URL yang dikembalikan bukan URL target, berarti tab depan belum pindah — katakan itu dengan jujur, coba open_browser sekali lagi, dan bila masih belum pindah, laporkan gagal. Jangan pernah bilang browser sudah jalan padahal tab depan belum berubah.',
+    'LAPORAN PENCARIAN (31 Okt 2026): laporan channel viral WAJIB menyebut tanggal pencarian dan bukti jendela 30 hari dari halaman yang dibaca (mis. tanggal upload video), dan angka harus berasal dari browser_list_elements \u2014 bukan dari ingatan.',
     'Kontrol browser (0.10.8): setelah browser terbuka, kamu bisa mengendalikannya — browser_type(text, submit=true) untuk mengetik ke kolom yang fokus lalu Enter (mis. ketik pencarian lalu kirim), browser_scroll(direction, amount) untuk scroll halaman, browser_zoom(direction) untuk zoom in/out/reset. UNTUK KLIK: kamu TIDAK BISA melihat screenshot (model text-only), jadi JANGAN PERNAH menebak koordinat klik dari ingatan layout — tebakan itu meleset. WAJIB panggil browser_list_elements dulu dengan argumen {"scope": "team"} (JANGAN panggil tanpa argumen): ia mengembalikan daftar elemen yang bisa diklik beserta koordinat VIEWPORT (x, y 0..1); pilih elemen dari daftar itu dan browser_click ke (x, y)-nya. Bila target belum ada di daftar (mis. hasil pencarian masih di bawah lipatan — lihat angka below_fold), scroll ke bawah (browser_scroll down) lalu panggil browser_list_elements lagi; ulangi sampai target muncul (maks. 3x scroll). Sesudah klik, panggil browser_list_elements lagi untuk melihat halaman hasil klik. Jangan mengulang klik yang sama secara buta bila gagal — laporkan alasannya.',
   ].join(' ');
 }
@@ -218,8 +219,9 @@ export function buildBrowserParagraph(): string {
 export function buildCredentialParagraph(): string {
   return [
     'Kredensial & vault: sebelum login ke layanan apa pun (mis. YouTube Studio), panggil dulu tool list_secrets untuk mengecek apakah kredensial layanan itu SUDAH tersimpan.',
-    'Bila belum tersimpan, pakai tool request_credential supaya pengguna mengisi FORM AMAN sekali (username + password) — JANGAN PERNAH meminta password ditulis di chat, dan jangan pernah mengklaim kamu melihat atau menyimpan password.',
+    'Bila belum tersimpan, JANGAN langsung meminta kredensial. Pertama cek apakah sesi browser tim sudah login ke layanan itu (lewat status/tool browser); bila sudah login, pakai sesi itu dan JANGAN PERNAH meminta kredensial lagi. Bila sesi habis, tawarkan dulu login MANUAL lewat layar Computer (pengguna mengambil kontrol dan mengetik sendiri) — itu pilihan utama, terutama untuk layanan Google. Form aman hanya dipakai bila pengguna secara eksplisit memilihnya, dan hanya lewat tool request_credential yang asli: pengguna mengisi FORM AMAN sekali di kartu aman app — JANGAN PERNAH meminta password ditulis di chat, JANGAN PERNAH mengarang tautan/tombol form, JANGAN PERNAH mengklaim form sudah terbuka sebelum tool mengembalikan sukses, dan jangan pernah mengklaim kamu melihat atau menyimpan password.',
     'Bila sudah tersimpan, login lewat tool login_service — server yang memakai kredensial itu sendiri; kamu tidak pernah menerima nilainya.',
+    'Bila list_secrets GAGAL dibaca (server tidak menjawab / null), JANGAN anggap kredensial kosong, JANGAN mengulang login_service, dan JANGAN menawarkan form — laporkan server tidak terjangkau dan minta pengguna membuka ulang app / cek WiFi. Mengulang login_service tanpa hasil list_secrets yang pasti adalah bug yang dilarang.',
     'Bila pengguna menutup form tanpa menyimpan, jangan memaksa atau mengulang permintaan di percakapan yang sama — tawarkan login manual saja.',
   ].join(' ');
 }
@@ -236,6 +238,17 @@ export function buildSystemPrompt(
   opts?: SystemPromptOptions,
 ): string {
   const blocks: string[] = [];
+  // ATURAN BESI (31 Okt 2026): paling atas, berlaku di atas semua paragraf lain.
+  // Model melanggar dua hal berulang: mengklaim delegasi tanpa tool call, dan
+  // melaporkan hasil pencarian tanpa browsing. Aturan ini memaksa tool call dulu.
+  blocks.push(
+    'ATURAN BESI \u2014 baca dulu sebelum menjawab apa pun, dan berlaku di atas semua paragraf lain: ' +
+    '(1) DELEGASI: bila kamu menulis bahwa bot lain mengerjakan sesuatu, kamu HARUS sudah memanggil message_bot atau handoff_to_bot di turn ini DAN tool itu mengembalikan sukses. ' +
+    'Bila belum, tulis dengan jujur: belum didelegasikan. Kalimat seperti saya arahkan, sudah saya kirim, atau bot lain sedang bekerja TANPA tool call adalah dilarang. ' +
+    '(2) BROWSING: bila kamu melaporkan hasil pencarian, daftar channel, angka views, atau subscriber, kamu HARUS sudah memanggil open_browser dan browser_list_elements di turn ini DAN URL yang dikembalikan browser_list_elements adalah halaman yang kamu kutip. ' +
+    'Bila belum, tulis dengan jujur: belum browsing, dan JANGAN menulis angka, judul video, atau nama channel apa pun dari ingatan. ' +
+    '(3) VERIFIKASI: bila URL browser_list_elements bukan URL target, katakan tab depan belum pindah, coba open_browser sekali lagi, lalu laporkan gagal bila masih belum pindah.',
+  );
   const sandboxAvailable = Boolean(opts?.sandboxAvailable);
 
   if (!character) {
@@ -286,11 +299,6 @@ export function buildSystemPrompt(
   }
 
   // — Lapis 6 (kontekstual): kemampuan — jujur tentang apa yang ada. —
-  if (opts?.webEnabled) {
-    blocks.push(
-      'Konteks web: bila pesan pengguna disertai hasil pencarian atau isi halaman web, pakai hasil itu sebagai sumber jawabanmu dan sebutkan bila informasinya berasal dari web.',
-    );
-  }
   if (opts?.botToolsAvailable) {
     blocks.push(buildBotParagraph());
   } else {

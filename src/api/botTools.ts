@@ -189,7 +189,11 @@ export function validateCreateBotArgs(args: unknown): CreateBotArgs {
  * (best-effort, seperti tombol "Buat bot" — gagal membuat room
  * tidak menggagalkan pembuatan bot).
  */
-export async function executeCreateBotTool(call: ParsedToolCall): Promise<string> {
+export async function executeCreateBotTool(
+  call: ParsedToolCall,
+  /** Video-parity Tahap 1: Chief pemanggil tool (untuk "Created by"). */
+  createdBy?: string,
+): Promise<string> {
   if (call.name !== CREATE_BOT_TOOL_NAME) {
     return 'Tool itu tidak dikenal di aplikasi ini.';
   }
@@ -207,6 +211,7 @@ export async function executeCreateBotTool(call: ParsedToolCall): Promise<string
       focus: checked.focus,
       role: checked.role,
       skills: checked.skills,
+      created_by: createdBy,
     });
   } catch (e) {
     // 0.10.13: server menolak skill yang belum terdaftar di rak
@@ -226,6 +231,7 @@ export async function executeCreateBotTool(call: ParsedToolCall): Promise<string
           name: checked.name,
           focus: checked.focus,
           role: checked.role,
+          created_by: createdBy,
         });
       } catch (e2) {
         if (e2 instanceof ApiError && e2.status === 409) {
@@ -246,7 +252,7 @@ export async function executeCreateBotTool(call: ParsedToolCall): Promise<string
   // Room 1-1 sendiri (best-effort — seperti tombol "Buat bot").
   let roomNote = '';
   try {
-    const target = await createBotChat(created);
+    const target = await createBotChat(created, undefined, createdBy);
     if (target.roomId) roomNote = ` Room chat-nya: ${target.roomId}.`;
   } catch {
     roomNote = ' (Room chat-nya belum terbentuk — pengguna bisa membukanya dari Home.)';
@@ -284,8 +290,11 @@ export async function executeListBotsTool(call: ParsedToolCall): Promise<string>
  * Dispatcher tool manajemen bot untuk tool loop BYO. TIDAK PERNAH
  * throw — semua kegagalan dikembalikan sebagai teks hasil tool.
  */
-export async function executeBotTool(call: ParsedToolCall): Promise<string> {
-  if (call.name === CREATE_BOT_TOOL_NAME) return executeCreateBotTool(call);
+export async function executeBotTool(
+  call: ParsedToolCall,
+  createdBy?: string,
+): Promise<string> {
+  if (call.name === CREATE_BOT_TOOL_NAME) return executeCreateBotTool(call, createdBy);
   if (call.name === LIST_BOTS_TOOL_NAME) return executeListBotsTool(call);
   return 'Tool itu tidak dikenal di aplikasi ini.';
 }

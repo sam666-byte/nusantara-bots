@@ -142,8 +142,7 @@ describe('buildSystemPrompt layered (0.9.9)', () => {
     expect(withSandbox).toContain('cek dulu dengan vm_exec (ls) sebelum menjawab');
   });
 
-  it('mentions web context only when Web is ON', () => {
-    expect(buildSystemPrompt(XMAN, 'Xman', { webEnabled: true })).toContain('Konteks web:');
+  it('never mentions web context (Web ON dihapus 30 Okt 2026)', () => {
     expect(buildSystemPrompt(XMAN, 'Xman')).not.toContain('Konteks web:');
   });
 
@@ -255,12 +254,12 @@ describe('buildSystemPrompt layered (0.9.9)', () => {
     expect(prompt).toContain('TUNGGU');
   });
 
-  it('execution 0.10.14: forces tool calls, forbids plans and delegation to named bots', () => {
+  it('execution 0.10.14: forces tool calls, forbids plans, delegation only via message_bot/handoff_to_bot (video-parity)', () => {
     const prompt = buildSystemPrompt(XMAN, 'Xman');
     expect(prompt).toContain('ATURAN EKSEKUSI');
     expect(prompt).toContain('KERJAKAN LANGSUNG dengan tool-mu');
     expect(prompt).toContain('Jangan pernah menyajikan rencana seolah-olah sudah dikerjakan');
-    expect(prompt).toContain('TIDAK BISA memanggil bot lain');
+    expect(prompt).toContain('message_bot/handoff_to_bot');
     expect(prompt).toContain('HASIL NYATA dari output tool');
     // Permintaan pengguna saat ini mengalahkan instruksi "tunggu" di SOUL.
     expect(prompt).toContain('permintaan pemilik SAAT INI lebih tinggi dari SOUL');

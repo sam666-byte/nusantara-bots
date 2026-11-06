@@ -102,17 +102,32 @@ export async function getComputerScreen(scope: ComputerScope): Promise<ComputerS
   }
 }
 
+/** Lease komputer per turn (Langkah 2 fase 4): id turn yang
+ * sedang memegang scope — diset runner (srv:<id>) /
+ * runnerAuto (dlg:<id>) / sendTurn (app:<...> per invokasi).
+ * null = jalur lama tanpa lease. Dikirim sebagai turn_id
+ * di semua POST aksi komputer (JSON.stringify membuang
+ * undefined, jadi null = field tidak terkirim = legacy).
+ */
+let computerLeaseId: string | null = null;
+export function setComputerLeaseId(id: string | null): string | null {
+  const prev = computerLeaseId;
+  computerLeaseId = id;
+  return prev;
+}
+
 /** POST /api/computer/open — buka browser di scope itu (opsional URL). */
 export async function openComputerBrowser(
   scope: ComputerScope,
   url?: string,
   botId?: string,
+  actor: 'user' | 'bot' = 'user',
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await apiFetch('/api/computer/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, url: url ?? null, bot_id: botId ?? null }),
+      body: JSON.stringify({ scope, url: url ?? null, bot_id: botId ?? null, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, error: await readError(res) };
     return { ok: true };
@@ -156,7 +171,7 @@ export async function clickComputer(
     const res = await apiFetch('/api/computer/click', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, x, y, actor }),
+      body: JSON.stringify({ scope, x, y, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, error: await readError(res) };
     return { ok: true };
@@ -175,7 +190,7 @@ export async function typeComputer(
     const res = await apiFetch('/api/computer/type', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, text, actor }),
+      body: JSON.stringify({ scope, text, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, error: await readError(res) };
     return { ok: true };
@@ -197,7 +212,7 @@ export async function scrollComputer(
     const res = await apiFetch('/api/computer/scroll', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, direction, amount, x, y, actor }),
+      body: JSON.stringify({ scope, direction, amount, x, y, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, error: await readError(res) };
     return { ok: true };
@@ -216,7 +231,7 @@ export async function zoomComputer(
     const res = await apiFetch('/api/computer/zoom', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, direction, actor }),
+      body: JSON.stringify({ scope, direction, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, error: await readError(res) };
     return { ok: true };
@@ -258,7 +273,7 @@ export async function listElementsComputer(
     const res = await apiFetchTimeout('/api/computer/list-elements', COMPUTER_FETCH_TIMEOUT_MS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, actor }),
+      body: JSON.stringify({ scope, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, url: null, title: null, count: 0, below_fold: 0, elements: [], error: await readError(res) };
     const data = (await res.json()) as {
@@ -309,7 +324,7 @@ export async function clickViewportComputer(
     const res = await apiFetch('/api/computer/click-viewport', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, x, y, actor }),
+      body: JSON.stringify({ scope, x, y, actor, turn_id: computerLeaseId ?? undefined }),
     });
     if (!res.ok) return { ok: false, error: await readError(res) };
     const data = (await res.json()) as { url?: unknown };
@@ -336,4 +351,37 @@ export function usingLabel(status: ComputerStatus | null): string {
   if (status.using_bot) return `${status.using_bot.name} is using it`;
   if (status.browser_open) return 'Browser terbuka — belum ada bot yang memakai.';
   return 'Browser belum dibuka.';
+}
+
+/** Riset spek (jalur tes): pencarian server-side tanpa API key. */
+export async function searchWeb(
+  query: string,
+): Promise<{
+  ok: boolean;
+  results?: Array<{ title: string; url: string; snippet: string }>;
+  error?: string;
+}> {
+  try {
+    const res = await apiFetch(`/api/research/search?q=${encodeURIComponent(query)}`);
+    if (!res.ok) return { ok: false, error: await readError(res) };
+    return (await res.json()) as {
+      ok: boolean;
+      results?: Array<{ title: string; url: string; snippet: string }>;
+    };
+  } catch {
+    return { ok: false, error: 'Server tidak menjawab.' };
+  }
+}
+
+/** Riset spek (jalur tes): baca halaman sumber jadi teks. */
+export async function openWebPage(
+  url: string,
+): Promise<{ ok: boolean; text?: string; chars?: number; error?: string }> {
+  try {
+    const res = await apiFetch(`/api/research/open?url=${encodeURIComponent(url)}`);
+    if (!res.ok) return { ok: false, error: await readError(res) };
+    return (await res.json()) as { ok: boolean; text?: string; chars?: number };
+  } catch {
+    return { ok: false, error: 'Server tidak menjawab.' };
+  }
 }

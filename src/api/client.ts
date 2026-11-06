@@ -27,6 +27,7 @@ import {
   PersistMessageResponse,
   Room,
   SaveMemoryResponse,
+  ServerTurn,
   SkillInfo,
 } from './types';
 
@@ -263,23 +264,31 @@ export async function getHealth(): Promise<HealthReport | null> {
  * Detail level tetap tersedia lewat getHealth().
  */
 export async function checkHealth(): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
-  try {
-    const base = await getServerUrl();
-    const headers = await authHeaders();
-    const res = await fetch(`${base}/api/health`, {
-      headers,
-      signal: controller.signal,
-    });
-    if (!res.ok) return false;
-    await res.json();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
+  // Retry 3x (perbaikan 31 Okt 2026): saat app dibuka ulang, WiFi HP
+  // sering belum stabil (pindah pita 2.4/5 GHz) sehingga probe pertama
+  // gagal padahal server hidup — jangan langsung merah. Jeda 1,2 dtk
+  // antar percobaan; false hanya bila ketiganya gagal.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1200));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+    try {
+      const base = await getServerUrl();
+      const headers = await authHeaders();
+      const res = await fetch(`${base}/api/health`, {
+        headers,
+        signal: controller.signal,
+      });
+      if (!res.ok) continue;
+      await res.json();
+      return true;
+    } catch {
+      continue;
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return false;
 }
 
 /** GET /api/characters — null on 401 (token needed).
@@ -345,15 +354,30 @@ export async function sendMockChat(
  * Gagal jaringan di kedua URL → throw; pemanggil (ChatScreen) WAJIB
  * menampilkan peringatan ke user, jangan menelan diam-diam.
  */
+/** Video-parity Tahap 1: field delegasi opsional untuk persistMessage. */
+export interface PersistMessageDelegation {
+  kind?: 'message' | 'delegation';
+  target_character?: string;
+  created_by?: string;
+  source_message_id?: number | string;
+}
+
 export async function persistMessage(
   room: string,
   character: string | null,
   text: string,
   role: 'user' | 'assistant',
   replyTo?: string,
+  delegation?: PersistMessageDelegation,
 ): Promise<PersistMessageResponse | null> {
   const body: Record<string, unknown> = { room, character, text, role };
   if (replyTo) body.reply_to = replyTo;
+  if (delegation?.kind) body.kind = delegation.kind;
+  if (delegation?.target_character) body.target_character = delegation.target_character;
+  if (delegation?.created_by) body.created_by = delegation.created_by;
+  if (delegation?.source_message_id !== undefined) {
+    body.source_message_id = delegation.source_message_id;
+  }
   const res = await postJsonResilient('/api/messages', body, CHAT_TIMEOUT_MS);
   if (res.status === 401) return null;
   if (!res.ok) throw new ApiError(res.status, await errorText(res));
@@ -391,6 +415,119 @@ export async function persistMessageWithRetry(
   throw lastError;
 }
 
+export interface DelegationRecord {
+  id: number;
+  target: string;
+  target_name: string;
+  target_room: string;
+  chief_id: string | null;
+  chief_room: string | null;
+  message: string;
+  intent: string;
+  delivery_key: string | null;
+  status: 'queued' | 'claimed' | 'done' | 'failed';
+  created_at: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+  result: string | null;
+  error: string | null;
+}
+
+/** Fase 7: delegasi sebagai record server (bukan cuma pesan chat). */
+export async function createDelegation(input: {
+  target: string;
+  message: string;
+  intent?: string;
+  chief_id?: string | null;
+  chief_room_id?: string | null;
+  delivery_key?: string;
+}): Promise<
+  | { ok: true; delegation: DelegationRecord; replayed?: boolean }
+  | { ok: false; error: string }
+  | null
+> {
+  const res = await postJsonResilient('/api/delegations', input, CHAT_TIMEOUT_MS);
+  if (res.status === 401) return null;
+  if (!res.ok) return { ok: false, error: await errorText(res) };
+  const json = (await res.json()) as {
+    delegation?: DelegationRecord;
+    delegations?: DelegationRecord[];
+    replayed?: boolean | boolean[];
+  };
+  const first = (json.delegations ?? [])[0] ?? json.delegation;
+  if (!first) return { ok: false, error: 'server tidak mengembalikan record delegasi' };
+  const rep = Array.isArray(json.replayed) ? json.replayed[0] : json.replayed;
+  return { ok: true, delegation: first, replayed: rep };
+}
+
+/**
+ * POST /api/delegations multi-target (Fase 8): satu panggilan,
+ * server memvalidasi SEMUA target dulu (atomik) lalu membuat
+ * satu record per target. Desain diadaptasi dari pola delegasi
+ * (Apache-2.0); atribusi hanya di komentar ini, bukan UI.
+ */
+export async function createDelegations(input: {
+  targets: string[];
+  message: string;
+  intent?: string;
+  chief_id?: string | null;
+  chief_room_id?: string | null;
+  delivery_key?: string;
+}): Promise<
+  | { ok: true; delegations: DelegationRecord[]; replayed: boolean[] }
+  | { ok: false; error: string }
+  | null
+> {
+  const res = await postJsonResilient('/api/delegations', input, CHAT_TIMEOUT_MS);
+  if (res.status === 401) return null;
+  if (!res.ok) return { ok: false, error: await errorText(res) };
+  const json = (await res.json()) as {
+    delegations?: DelegationRecord[];
+    delegation?: DelegationRecord;
+    replayed?: boolean | boolean[];
+  };
+  const list = json.delegations ?? (json.delegation ? [json.delegation] : []);
+  const rep: boolean[] = Array.isArray(json.replayed)
+    ? json.replayed
+    : list.map(() => (typeof json.replayed === 'boolean' ? json.replayed : false));
+  return { ok: true, delegations: list, replayed: rep };
+}
+
+export async function getDelegations(
+  status: string,
+): Promise<DelegationRecord[] | null> {
+  const data = await apiJson<{ delegations: DelegationRecord[] }>(
+    `/api/delegations?status=${encodeURIComponent(status)}`,
+  );
+  return data ? data.delegations : null;
+}
+
+export async function claimDelegation(
+  id: number,
+): Promise<DelegationRecord | null> {
+  const res = await postJsonResilient(
+    `/api/delegations/${id}/claim`,
+    {},
+    CHAT_TIMEOUT_MS,
+  );
+  if (!res.ok) return null;
+  const json = (await res.json()) as { delegation: DelegationRecord };
+  return json.delegation;
+}
+
+export async function completeDelegation(
+  id: number,
+  result?: string,
+  error?: string,
+): Promise<boolean> {
+  const res = await postJsonResilient(
+    `/api/delegations/${id}/complete`,
+    error ? { error } : { result: result ?? '' },
+    CHAT_TIMEOUT_MS,
+  );
+  return res.ok;
+}
+
 /**
  * POST /api/characters — create a new bot. `focus` is required and
  * must be one of the FOCUS_DEFAULTS keys; `role` / `skills` fall back
@@ -402,12 +539,15 @@ export async function createCharacter(input: {
   focus: CharacterFocus;
   role?: string;
   skills?: string[];
+  /** Video-parity Tahap 1: Chief pembuat bot (untuk "Created by"). */
+  created_by?: string;
 }): Promise<Character | null> {
   // 0.10.9: normalisasi fokus di boundary API — server hanya terima
   // kode Inggris; label Indonesia ("sehari-hari" dsb.) dipetakan dulu.
   const body: Record<string, unknown> = { name: input.name, focus: focusCodeFor(input.focus) };
   if (input.role !== undefined) body.role = input.role;
   if (input.skills !== undefined) body.skills = input.skills;
+  if (input.created_by !== undefined) body.created_by = input.created_by;
   const res = await postJson('/api/characters', body);
   if (res.status === 401) return null;
   if (!res.ok) throw new ApiError(res.status, await errorText(res));
@@ -536,12 +676,15 @@ export async function createRoom(input: {
   name: string;
   members?: string[];
   mode?: 'chat' | 'meeting' | 'space';
+  /** Video-parity Tahap 1: siapa yang membuat room ini. */
+  created_by?: string;
 }): Promise<Room | null> {
   const body: Record<string, unknown> = {
     name: input.name,
     members: input.members ?? [],
     mode: input.mode ?? 'chat',
   };
+  if (input.created_by !== undefined) body.created_by = input.created_by;
   const res = await postJson('/api/rooms', body);
   if (res.status === 401) return null;
   if (!res.ok) throw new ApiError(res.status, await errorText(res));
@@ -643,6 +786,35 @@ export async function recordCost(input: {
 }
 
 /**
+ * POST /api/costs/record dengan usage_available=false —
+ * penanda eksplisit 'biaya tidak terukur' (Fase 4b). Dipakai
+ * bila provider streaming tidak mengirim usage (Mercury).
+ * TIDAK mengirim angka token apa pun: nol palsu dilarang.
+ * Best-effort seperti recordCost (null bila gagal).
+ */
+export async function recordUnmeasuredCost(input: {
+  bot: string;
+  taskId: string;
+  taskKind?: string;
+  model: string;
+}): Promise<CostRecord | null> {
+  try {
+    const res = await postJson('/api/costs/record', {
+      bot: input.bot,
+      task_id: input.taskId,
+      task_kind: input.taskKind ?? 'chat',
+      model: input.model,
+      usage_available: false,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { record: CostRecord };
+    return data.record ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * POST /api/stop — stop replies in a room. Returns true when the
  * server recorded the stop. Throws ApiError on 400 (unknown room).
  */
@@ -651,4 +823,79 @@ export async function stopRoom(room: string): Promise<boolean> {
   if (res.status === 401) return false;
   if (!res.ok) throw new ApiError(res.status, await errorText(res));
   return true;
+}
+
+/**
+ * Langkah 2 fase 3 — turn server (dipakai app bila server mendukung).
+ *
+ * Probe kapabilitas: GET /api/turns mengembalikan 200 di server baru,
+ * 404 di server lama — app yang tidak kenal turn server tetap memakai
+ * loop in-app. Semua fungsi ini melempar ApiError untuk status
+ * non-2xx (kecuali probe yang mengembalikan boolean).
+ */
+export async function probeServerTurns(): Promise<boolean> {
+  try {
+    const res = await apiFetch('/api/turns');
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function submitServerTurn(input: {
+  room: string;
+  character: string;
+  text: string;
+  replyTo?: string;
+  idempotencyKey?: string;
+}): Promise<{ turn: ServerTurn; user_message: ChatMessage; replayed?: boolean }> {
+  const body: Record<string, unknown> = {
+    room: input.room,
+    character: input.character,
+    text: input.text,
+  };
+  if (input.replyTo) body.reply_to = input.replyTo;
+  if (input.idempotencyKey) body.idempotency_key = input.idempotencyKey;
+  const res = await postJson('/api/turns', body);
+  if (res.status === 401) {
+    throw new ApiError(401, 'Server menjawab 401 — simpan access token dulu.');
+  }
+  if (!res.ok) throw new ApiError(res.status, await errorText(res));
+  return (await res.json()) as {
+    turn: ServerTurn;
+    user_message: ChatMessage;
+    replayed?: boolean;
+  };
+}
+
+export async function getServerTurns(
+  room?: string,
+  status?: string,
+): Promise<ServerTurn[]> {
+  const q = new URLSearchParams();
+  if (room) q.set('room', room);
+  if (status) q.set('status', status);
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  const data = await apiJson<{ turns: ServerTurn[] }>(`/api/turns${suffix}`);
+  return data?.turns ?? [];
+}
+
+/** Turn aktif (queued/running) pertama di room, atau null bila tidak ada. */
+export async function getActiveServerTurn(room: string): Promise<ServerTurn | null> {
+  const [queued, running] = await Promise.all([
+    getServerTurns(room, 'queued'),
+    getServerTurns(room, 'running'),
+  ]);
+  const all = [...queued, ...running].sort((a, b) => a.id - b.id);
+  return all[0] ?? null;
+}
+
+/** Apakah runner server melapor hidup & segar (< 90 dtk)? */
+export async function probeRunnerPresence(): Promise<boolean> {
+  try {
+    const data = await apiJson<{ present: boolean }>('/api/runner/presence');
+    return !!data?.present;
+  } catch {
+    return false;
+  }
 }

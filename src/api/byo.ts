@@ -54,7 +54,7 @@ export async function wasByoEverConfigured(): Promise<boolean> {
 }
 
 /** Timeout panggilan model (0.10.13): request yang macet tidak boleh gantung selamanya. */
-export const BYO_XHR_TIMEOUT_MS = 30000;
+export const BYO_XHR_TIMEOUT_MS = 300000;
 
 /** Error thrown when the daily-cap gate refuses a new task. */
 export class CapBlockedError extends Error {
@@ -550,7 +550,7 @@ function doXhr(
       : undefined;
 
     xhr.open('POST', `${cfg.baseUrl}/chat/completions`);
-    // 0.10.13: timeout 30 dtk — request yang macet (provider /
+    // 0.10.13: timeout 120 dtk (naik dari 30 dtk, 4 Nov 2026) — request yang macet (provider /
     // jaringan diam) tidak boleh gantung selamanya; handler
     // ontimeout sudah ada, tapi tanpa nilai timeout ia tak pernah
     // jalan (timeout 0 = tanpa batas). Kini gagal cepat dengan
@@ -771,6 +771,32 @@ export function isToolFailureResult(result: string): boolean {
  * Bila provider tidak mendukung tool (tidak pernah mengembalikan
  * tool_calls), loop berhenti di ronde pertama dengan jawaban teks.
  */
+/**
+ * fix22 — deteksi tugas browser dari teks pesan user turn ini.
+ * Hanya terpicu bila user eksplisit minta buka/browser atau
+ * menulis URL — pertanyaan umum tanpa kata itu tidak terpengaruh,
+ * supaya chat biasa tidak dipaksa memanggil tool.
+ */
+function contentToPlainText(content: ChatContent): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => (p && p.type === 'text' ? p.text : ''))
+      .join(' ');
+  }
+  return '';
+}
+
+function isBrowserTaskText(text: string): boolean {
+  const t = text.toLowerCase();
+  return /\bbuka\b|\bbrowser\b|https?:\/\/|www\./.test(t);
+}
+
+function isResearchTaskText(text: string): boolean {
+  const t = text.toLowerCase();
+  return /\bris(et|earch)\b|data ter(verifikasi|baru|kini)|berita terbaru|tren terbaru|statistik|cari tahu|cek (fakta|harga)|bandingkan\b/.test(t);
+}
+
 export async function streamByoReplyWithTools(
   cfg: ByoConfig,
   content: ChatContent,
@@ -780,9 +806,28 @@ export async function streamByoReplyWithTools(
     throw new Error('BYO-API is not configured (need baseUrl and credential).');
   }
   const maxRounds = opts.maxRounds ?? TOOL_LOOP_HARD_MAX_ROUNDS;
+  // fix22: tugas browser turn ini + apakah retry paksa-tool sudah dipakai.
+  const browserTask = isBrowserTaskText(contentToPlainText(content));
+  let browserRetryUsed = false;
+  // Riset spek (jalur tes): tugas riset turn ini + apakah retry paksa-tool sudah dipakai.
+  const researchTask = isResearchTaskText(contentToPlainText(content));
+  let researchRetryUsed = false;
   const tools = opts.tools && opts.tools.length > 0 ? opts.tools : null;
   let messages = buildChatMessages(content, opts.systemPrompt ?? null, opts.history ?? null);
   const executed: ParsedToolCall[] = [];
+  // Riset spek (jalur tes): apakah turn ini sudah memanggil web_search
+  // atau sudah mendelegasikan ke bot lain (Chief -> spesialis).
+  const hasWebSearch = (): boolean => executed.some((c) => c.name === 'web_search');
+  const hasDelegated = (): boolean =>
+    executed.some((c) => c.name === 'message_bot' || c.name === 'handoff_to_bot');
+  const applyResearchLabel = (t: string): string => {
+    if (!researchTask || !t || t.includes('http')) return t;
+    if (!hasWebSearch()) return t;
+    return (
+      t +
+      '\n\n[Catatan: jawaban ini belum mengutip URL sumber yang dibuka lewat tool — anggap sebagai ide mentah, bukan data terverifikasi.]'
+    );
+  };
   let lastText = '';
   let lastUsage: TokenUsage | null = null;
   let lastModel: string | undefined;
@@ -851,12 +896,12 @@ export async function streamByoReplyWithTools(
       if (isToolFailureResult(result)) continue;
       const name = signature.split('\n')[0];
       const oneLine = result.replace(/\s+/g, ' ').trim();
-      parts.push(`${name}: ${oneLine.length > 300 ? `${oneLine.slice(0, 300)}…` : oneLine}`);
+      parts.push(`${name}: ${oneLine.length > 8000 ? `${oneLine.slice(0, 8000)}…` : oneLine}`);
     }
     if (parts.length === 0) return '';
     return (
       'Pemeriksaan sebagian selesai — rangkuman dari hasil tool yang sudah ada:\n' +
-      parts.slice(-4).join('\n') +
+      parts.join('\n') +
       '\n(Sebagian belum sempat dicek; tanyakan lagi untuk melanjutkannya.)'
     );
   };
@@ -864,9 +909,14 @@ export async function streamByoReplyWithTools(
   // Jawaban akhir: utamakan rangkuman model, lalu rangkuman parsial
   // dari hasil tool, terakhir teks generik.
   const finishWithSummary = async (): Promise<string> => {
+    // Riset spek: jalur akhir loop juga tidak boleh meloloskan riset
+    // tanpa web_search (dan tanpa delegasi).
+    if (researchTask && !hasWebSearch() && !hasDelegated()) {
+      return 'Riset gagal: saya tidak bisa menjalankan pencarian lewat tool di turn ini, jadi saya tidak mengarang data, tren, atau daftarnya. Coba kirim lagi.';
+    }
     const finalText = await requestFinalAnswer();
-    if (finalText) return finalText;
-    if (lastText) return lastText;
+    if (finalText) return applyResearchLabel(finalText);
+    if (lastText) return applyResearchLabel(lastText);
     return buildPartialSummary();
   };
 
@@ -923,9 +973,65 @@ export async function streamByoReplyWithTools(
     lastText = text;
 
     if (toolCalls.length === 0) {
+      // fix22 — enforcement tugas browser (proposal A + C):
+      // teks tanpa tool call TIDAK BOLEH diterima final di tugas
+      // browser, karena itulah halusinasi Leg2 (daftar karangan
+      // padahal computer-state tidak bergerak).
+      // Riset spek (jalur tes): tugas riset TIDAK BOLEH dijawab tanpa
+      // web_search — kecuali turn ini mendelegasikan ke bot riset
+      // (Chief), yang gilirannya diwajibkan guard yang sama.
+      if (researchTask && !hasWebSearch() && !hasDelegated()) {
+        if (!researchRetryUsed) {
+          researchRetryUsed = true;
+          messages = [
+            ...messages,
+            {
+              role: 'user',
+              content:
+                'WAJIB: tugas ini adalah tugas riset. Kamu HARUS memanggil tool web_search dulu (lalu web_open untuk membaca sumbernya) sebelum menjawab, atau delegasikan tugas ini ke bot riset. Jangan menjawab dari ingatan. Di jawaban final, kutip URL sumber yang kamu buka. Bila tool gagal, katakan dengan jujur bahwa riset gagal — jangan mengarang data.',
+            },
+          ];
+          continue;
+        }
+        return {
+          streamed: lastStreamed,
+          text: 'Riset gagal: saya tidak bisa menjalankan pencarian lewat tool di turn ini, jadi saya tidak mengarang data, tren, atau daftarnya. Coba kirim lagi.',
+          usage: lastUsage,
+          model: lastModel,
+          toolCalls: executed,
+          rounds,
+        };
+      }
+      if (browserTask && executed.length === 0) {
+        if (!browserRetryUsed) {
+          browserRetryUsed = true;
+          // Retry SEKALI dengan instruksi eksplisit WAJIB panggil
+          // tool — loop lanjut ke ronde berikutnya, bukan return.
+          messages = [
+            ...messages,
+            {
+              role: 'user',
+              content:
+                'WAJIB: tugas ini adalah tugas browser. Kamu HARUS memanggil tool open_browser ke URL target, lalu browser_list_elements untuk melihat halaman itu, sebelum menjawab. Jangan menjawab dari ingatan atau menebak daftar elemen, judul, atau jumlah. Bila tool gagal, katakan dengan jujur bahwa tool tidak jalan — jangan mengarang.',
+            },
+          ];
+          continue;
+        }
+        // Retry sudah dipakai tapi model tetap tidak memanggil tool:
+        // JANGAN posting teks model (berisiko karangan). Laporkan
+        // jujur bahwa tool tidak jalan.
+        return {
+          streamed: lastStreamed,
+          text: 'Tool tidak jalan: saya tidak bisa membuka browser dan memverifikasi halaman lewat tool di turn ini, jadi saya tidak mengarang daftar elemen, judul, atau jumlahnya. Coba kirim lagi.',
+          usage: lastUsage,
+          model: lastModel,
+          toolCalls: executed,
+          rounds,
+        };
+      }
       return {
         streamed: lastStreamed,
-        text,
+        text: applyResearchLabel(text),
         usage: lastUsage,
         model: lastModel,
         toolCalls: executed,
