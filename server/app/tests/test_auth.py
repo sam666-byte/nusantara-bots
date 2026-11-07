@@ -6,6 +6,8 @@ prints a token: tests assert on HTTP statuses only, never on a
 token value appearing in a file or response body.
 """
 
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -117,6 +119,7 @@ class AuthUnitTest(unittest.TestCase):
                                   None, {"GROKBOT_APP_OPEN_LAN": value})
 
     def test_remote_bind_warning_only_for_open_lan(self):
+        """remote_bind_warning warns only for non-loopback OPEN_LAN binds."""
         # Remote bind with a token is the supported remote setup:
         # no warning. Loopback never warns, even with OPEN_LAN.
         self.assertIsNone(remote_bind_warning("127.0.0.1", None))
@@ -131,6 +134,7 @@ class AuthUnitTest(unittest.TestCase):
         self.assertIn("OPEN_LAN", warning)
 
     def test_open_lan_create_server_builds_without_token(self):
+        """Non-loopback OPEN_LAN=1 builds token-less and warns on stderr."""
         tmp = tempfile.TemporaryDirectory()
         chars = Path(tmp.name) / "characters"
         chars.mkdir()
@@ -138,11 +142,16 @@ class AuthUnitTest(unittest.TestCase):
         old = os.environ.get("GROKBOT_APP_OPEN_LAN")
         os.environ["GROKBOT_APP_OPEN_LAN"] = "1"
         try:
-            httpd = create_server(0,
-                                  characters_dir=str(chars),
-                                  chat_file=str(Path(tmp.name) / "chat.json"),
-                                  memory_db=str(Path(tmp.name) / "memory.db"),
-                                  host="0.0.0.0", token=None)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                httpd = create_server(0,
+                                      characters_dir=str(chars),
+                                      chat_file=str(Path(tmp.name) / "chat.json"),
+                                      memory_db=str(Path(tmp.name) / "memory.db"),
+                                      host="0.0.0.0", token=None)
+            # Startup must print the OPEN_LAN warning to stderr.
+            self.assertIn("PERINGATAN", stderr.getvalue())
+            self.assertIn("OPEN_LAN", stderr.getvalue())
             try:
                 self.assertIsNone(httpd.app_state.token)
             finally:

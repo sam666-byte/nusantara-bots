@@ -91,12 +91,22 @@ export function isLocalServerUrl(url: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
-/** True for a private-LAN host (192.168.x.x, 10.x.x.x, 172.16-31.x.x). */
+/**
+ * True for a private-LAN host (192.168.x.x, 10.x.x.x, 172.16-31.x.x).
+ * The range checks only match numeric IPv4 hosts: a hostname like
+ * 10.attacker.example must NOT count as private, or the app would
+ * send the access token to it over plain http without warning.
+ */
 function isPrivateLanHost(host: string): boolean {
+  const parts = host.split('.');
+  const isIpv4 =
+    parts.length === 4 &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255);
+  if (!isIpv4) return host.endsWith('.local');
   return (
-    host.startsWith('10.') ||
-    host.startsWith('192.168.') ||
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) ||
+    parts[0] === '10' ||
+    (parts[0] === '192' && parts[1] === '168') ||
+    (parts[0] === '172' && Number(parts[1]) >= 16 && Number(parts[1]) <= 31) ||
     host.endsWith('.local')
   );
 }
@@ -120,10 +130,29 @@ export async function getServerUrl(): Promise<string> {
 }
 
 export async function setServerUrl(url: string): Promise<void> {
-  const clean = normalizeBaseUrl(url);
+  // Schemes are case-insensitive (RFC 3986): accept an uppercase
+  // paste like HTTPS://... by lowercasing only the scheme, keeping
+  // the rest of the URL exactly as typed.
+  const base = normalizeBaseUrl(url);
+  const schemeEnd = base.indexOf('://');
+  const clean =
+    schemeEnd > 0
+      ? base.slice(0, schemeEnd).toLowerCase() + base.slice(schemeEnd)
+      : base;
   if (!clean) throw new Error('Server URL must not be empty.');
   if (!/^https?:\/\/.+/.test(clean)) {
     throw new Error('Server URL harus diawali http:// atau https://.');
+  }
+  // Reject hostless URLs (e.g. http://?x=1): the authority after
+  // "://" must be present and contain a host, or requests can never
+  // reach a server even though saving reports success.
+  const authority = clean
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split(/[\/?#]/)[0];
+  if (!authority || !serverUrlHost(clean)) {
+    throw new Error(
+      'Server URL harus punya host (contoh: http://192.168.1.10:8780).',
+    );
   }
   await AsyncStorage.setItem(SERVER_URL_KEY, clean);
 }

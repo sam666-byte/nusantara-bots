@@ -94,7 +94,7 @@ RUNNER_SERVER_TOKEN=<isi-file-token> \
 RUNNER_MODEL_BASE_URL=<base-url-model-kamu> \
 RUNNER_MODEL=<model> \
 SAMAI_API_KEY=<redacted> \
-python3 server/runner_service.py
+python3 runner_service.py
 ```
 
 ## Struktur
