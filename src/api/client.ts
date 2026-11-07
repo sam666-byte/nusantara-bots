@@ -36,6 +36,11 @@ import {
  * address of your own server (for example http://your-server:8780)
  * in Settings → Server URL. The stored value, once set, overrides
  * this default.
+ *
+ * The server does NOT have to be local: any reachable URL works,
+ * local (http://192.168.x.x:8780) or remote (https://box-kamu:8780,
+ * e.g. an Instabox public URL for port 8780). A remote server
+ * must use an access token — see server/README.md "Server jauh".
  */
 export const DEFAULT_SERVER_URL = 'http://YOUR_SERVER:8780';
 /** Timeout untuk persist/load chat (0.10.12) — fetch polos tanpa timeout bisa gantung selamanya. */
@@ -74,14 +79,81 @@ function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
 }
 
+/** Host part of a server URL, lower-cased, without port or path. */
+function serverUrlHost(url: string): string {
+  const withoutScheme = url.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  return withoutScheme.split('/')[0].split(':')[0].toLowerCase().replace(/^\[|\]$/g, '');
+}
+
+/** True for localhost / loopback hosts (bukan server jauh). */
+export function isLocalServerUrl(url: string): boolean {
+  const host = serverUrlHost(url);
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+/**
+ * True for a private-LAN host (192.168.x.x, 10.x.x.x, 172.16-31.x.x).
+ * The range checks only match numeric IPv4 hosts: a hostname like
+ * 10.attacker.example must NOT count as private, or the app would
+ * send the access token to it over plain http without warning.
+ */
+function isPrivateLanHost(host: string): boolean {
+  const parts = host.split('.');
+  const isIpv4 =
+    parts.length === 4 &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255);
+  if (!isIpv4) return host.endsWith('.local');
+  return (
+    parts[0] === '10' ||
+    (parts[0] === '192' && parts[1] === '168') ||
+    (parts[0] === '172' && Number(parts[1]) >= 16 && Number(parts[1]) <= 31) ||
+    host.endsWith('.local')
+  );
+}
+
+/**
+ * True when the server URL is plain http:// to a host that is
+ * neither loopback nor private LAN — i.e. traffic (including the
+ * access token) would travel unencrypted over the public internet.
+ * Callers should warn and suggest https:// + an access token.
+ */
+export function isPlainHttpRemoteUrl(url: string): boolean {
+  const clean = url.trim().toLowerCase();
+  if (!clean.startsWith('http://')) return false;
+  const host = serverUrlHost(url);
+  return Boolean(host) && !isLocalServerUrl(url) && !isPrivateLanHost(host);
+}
+
 export async function getServerUrl(): Promise<string> {
   const stored = await AsyncStorage.getItem(SERVER_URL_KEY);
   return stored ? normalizeBaseUrl(stored) : DEFAULT_SERVER_URL;
 }
 
 export async function setServerUrl(url: string): Promise<void> {
-  const clean = normalizeBaseUrl(url);
+  // Schemes are case-insensitive (RFC 3986): accept an uppercase
+  // paste like HTTPS://... by lowercasing only the scheme, keeping
+  // the rest of the URL exactly as typed.
+  const base = normalizeBaseUrl(url);
+  const schemeEnd = base.indexOf('://');
+  const clean =
+    schemeEnd > 0
+      ? base.slice(0, schemeEnd).toLowerCase() + base.slice(schemeEnd)
+      : base;
   if (!clean) throw new Error('Server URL must not be empty.');
+  if (!/^https?:\/\/.+/.test(clean)) {
+    throw new Error('Server URL harus diawali http:// atau https://.');
+  }
+  // Reject hostless URLs (e.g. http://?x=1): the authority after
+  // "://" must be present and contain a host, or requests can never
+  // reach a server even though saving reports success.
+  const authority = clean
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split(/[\/?#]/)[0];
+  if (!authority || !serverUrlHost(clean)) {
+    throw new Error(
+      'Server URL harus punya host (contoh: http://192.168.1.10:8780).',
+    );
+  }
   await AsyncStorage.setItem(SERVER_URL_KEY, clean);
 }
 

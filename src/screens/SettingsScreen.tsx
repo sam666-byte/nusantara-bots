@@ -34,6 +34,7 @@ import {
   checkHealth,
   getAuthToken,
   getServerUrl,
+  isPlainHttpRemoteUrl,
   setAuthToken,
   setServerUrl,
 } from '../api/client';
@@ -190,8 +191,11 @@ export function SettingsScreen() {
     try {
       await setServerUrl(serverUrl.trim());
       Alert.alert('Server', 'Alamat server disimpan.');
-    } catch {
-      Alert.alert('Server', 'Gagal menyimpan alamat server.');
+    } catch (e) {
+      Alert.alert(
+        'Server',
+        e instanceof Error ? e.message : 'Gagal menyimpan alamat server.',
+      );
     } finally {
       setBusy(false);
     }
@@ -202,10 +206,10 @@ export function SettingsScreen() {
     try {
       const ok = await checkHealth();
       setHealthy(ok);
-      setTestMsg(ok ? 'Terhubung ke server.' : 'Server tidak terjangkau (mode Lokal).');
+      setTestMsg(ok ? 'Terhubung ke server.' : 'Server tidak terjangkau.');
     } catch {
       setHealthy(false);
-      setTestMsg('Server tidak terjangkau (mode Lokal).');
+      setTestMsg('Server tidak terjangkau.');
     }
   };
 
@@ -228,7 +232,7 @@ export function SettingsScreen() {
       <View style={styles.statusRow}>
         <View style={[styles.statusDot, healthy ? styles.statusDotOk : styles.statusDotBad]} />
         <Text style={styles.statusText}>
-          {healthy === null ? 'Status koneksi belum dicek.' : healthy ? 'Terhubung ke server' : 'Lokal — server tidak terjangkau'}
+          {healthy === null ? 'Status koneksi belum dicek.' : healthy ? 'Terhubung ke server' : 'Server tidak terjangkau'}
         </Text>
       </View>
 
@@ -313,16 +317,28 @@ export function SettingsScreen() {
       </View>
 
       <Text style={styles.section}>Server</Text>
+      <Text style={styles.hint}>
+        Bisa server lokal (http://192.168.x.x:8780) atau server jauh
+        (https://alamat-box-kamu:8780, mis. URL publik Instabox untuk
+        port 8780). Server jauh wajib pakai Access token di bawah.
+      </Text>
       <Text style={styles.label}>Server URL</Text>
       <TextInput
         style={styles.input}
-        placeholder="http://alamat-server:port"
+        placeholder="https://alamat-server:8780"
         placeholderTextColor={colors.muted}
         value={serverUrl}
         onChangeText={setServerUrlState}
         autoCapitalize="none"
         autoCorrect={false}
       />
+      {isPlainHttpRemoteUrl(serverUrl) ? (
+        <Text style={styles.hint}>
+          ⚠️ Server jauh lewat http:// tanpa enkripsi — token dan isi
+          chat bisa disadap di perjalanan. Pakai https:// bila bisa,
+          dan jangan pernah memakai server tanpa token di internet publik.
+        </Text>
+      ) : null}
       <View style={styles.buttonRow}>
         <Pressable style={[styles.button, styles.buttonPrimary]} onPress={saveServer} disabled={busy}>
           <Text style={styles.buttonPrimaryText}>Simpan Server</Text>

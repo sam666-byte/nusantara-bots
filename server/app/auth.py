@@ -93,6 +93,29 @@ def resolve_bind(host, token, env=None):
     return host, token
 
 
+def remote_bind_warning(host, token, env=None):
+    """Warning text for a risky non-loopback bind, or None.
+
+    Only the OPEN_LAN case warns: a non-loopback bind with a token
+    is the supported remote setup (token gate stays on), and a
+    loopback bind needs no warning. A non-loopback bind without a
+    token and without the opt-in never reaches this — resolve_bind
+    already refused it before any socket is opened.
+    """
+    if is_loopback(host):
+        return None
+    if open_lan_enabled(env):
+        return (
+            "PERINGATAN: server non-loopback tanpa token "
+            "(GROKBOT_APP_OPEN_LAN=1) — semua /api/* terbuka untuk "
+            "siapa saja yang bisa menjangkau port ini. Jangan pakai "
+            "mode ini di internet publik (mis. URL publik Instabox); "
+            "pakai token (GROKBOT_APP_TOKEN_FILE) dan https:// "
+            "reverse proxy, atau Tailscale."
+        )
+    return None
+
+
 def token_ok(presented, expected):
     """Header check: open when no token is configured, constant-
     time comparison otherwise. Never logs either value."""
